@@ -1,5 +1,17 @@
 let currentTab = "vehicles";
 
+function escHtml(str) {
+  return String(str ?? "").replace(/[&<>"']/g, function (m) {
+    return {
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;"
+    }[m];
+  });
+}
+
 function input(value, name, type = "text") {
   return `<input class="input" data-name="${name}" type="${type}" value="${escHtml(value ?? "")}">`;
 }
@@ -7,8 +19,10 @@ function input(value, name, type = "text") {
 function setAdminStatus(message, type = "") {
   const el = document.getElementById("adminStatus");
   if (!el) return;
+
   el.textContent = message || "";
   el.className = "status-line small";
+
   if (type) el.classList.add(type);
 }
 
@@ -17,7 +31,7 @@ function normalizePreviewImageUrl(url) {
 
   if (!s) return "";
 
-  // Nur HTTPS ist erlaubt.
+  // Nur HTTPS-Bildlinks sind gültig.
   if (!/^https:\/\//i.test(s)) return "";
 
   return s;
@@ -39,11 +53,21 @@ function parseImageTextarea(value) {
     });
 }
 
-function renderImagePreview(images) {
-  const urls = parseImageTextarea(images);
+function imagesToTextarea(images) {
+  return (images || [])
+    .slice()
+    .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0))
+    .map((img) => String(img.image_url || "").trim())
+    .filter(Boolean)
+    .filter((url) => /^https:\/\//i.test(url))
+    .join("\n");
+}
+
+function renderImagePreview(imageText) {
+  const urls = parseImageTextarea(imageText);
 
   if (!urls.length) {
-    return `<div class="img-preview-empty">Keine Bilder eingetragen</div>`;
+    return `<div class="img-preview-empty">Keine gültigen https:// Bilder eingetragen</div>`;
   }
 
   return `
@@ -52,6 +76,7 @@ function renderImagePreview(images) {
         .slice(0, 10)
         .map((url, index) => {
           const previewUrl = normalizePreviewImageUrl(url);
+
           return `
             <div class="img-preview-item" title="${escHtml(url)}">
               <span>${index + 1}${index === 0 ? " ★" : ""}</span>
@@ -65,16 +90,29 @@ function renderImagePreview(images) {
 }
 
 async function requireLogin() {
-  const { data } = await window.lfcSupabase.auth.getUser();
+  const { data, error } = await window.lfcSupabase.auth.getUser();
 
-  if (!data.user) {
+  if (error || !data.user) {
     document.getElementById("authStatus").innerHTML =
       'Nicht eingeloggt. <a href="login.html">Zum Login</a>';
     return false;
   }
 
+  const { data: profile } = await window.lfcSupabase
+    .from("profiles")
+    .select("role,is_active")
+    .eq("id", data.user.id)
+    .maybeSingle();
+
+  if (!profile || !profile.is_active || !["employee", "manager", "admin"].includes(profile.role)) {
+    document.getElementById("authStatus").innerHTML =
+      "Eingeloggt, aber kein Zugriff auf die Verwaltung.";
+    return false;
+  }
+
   document.getElementById("authStatus").textContent =
-    `✅ Eingeloggt als ${data.user.email}`;
+    `✅ Eingeloggt als ${data.user.email} (${profile.role})`;
+
   return true;
 }
 
@@ -131,13 +169,18 @@ async function loadVehicles() {
               <tr data-id="${escHtml(v.id)}">
                 <td>
                   <div class="small">${escHtml(v.craft_key)}</div>
-                  ${input(v.display_name, "display_name")}
+
+                  <div class="small">Anzeigename</div>
+                  ${input(v.display_name || "", "display_name")}
+
                   <div class="small">Bauplan</div>
                   ${input(v.blueprint_name || "", "blueprint_name")}
                 </td>
 
                 <td>
-                  ${input(v.price, "price", "number")}
+                  <div class="small">Preis</div>
+                  ${input(v.price ?? 0, "price", "number")}
+
                   <div class="small">Sortierung</div>
                   ${input(v.sort_order ?? 1000, "sort_order", "number")}
                 </td>
@@ -240,6 +283,22 @@ async function saveVehicle(e) {
   });
 
   const imageTextarea = tr.querySelector('[data-name="_image_urls"]');
+  const rawImageLines = String(imageTextarea ? imageTextarea.value : "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const invalidImageLines = rawImageLines.filter((url) => !/^https:\/\//i.test(url));
+
+  if (invalidImageLines.length) {
+    alert(
+      "Es sind ungültige Bildlinks vorhanden.\n\n" +
+      "Erlaubt sind nur Links, die mit https:// beginnen.\n\n" +
+      invalidImageLines.join("\n")
+    );
+    return;
+  }
+
   const imageUrls = parseImageTextarea(imageTextarea ? imageTextarea.value : "");
 
   const saveButton = e.target;
@@ -296,7 +355,18 @@ async function loadOrders() {
 
   const { data, error } = await window.lfcSupabase
     .from("orders")
-    .select("id,created_at,order_number,status,public_info,public_status_label,customer_name,customer_contact,internal_notes,total_price")
+    .select(`
+      id,
+      created_at,
+      order_number,
+      status,
+      public_info,
+      public_status_label,
+      customer_name,
+      customer_contact,
+      internal_notes,
+      total_price
+    `)
     .order("created_at", { ascending: false })
     .limit(200);
 
@@ -343,7 +413,7 @@ async function loadOrders() {
                     "rejected",
                     "cancelled"
                   ]
-                    .map((s) => `<option ${o.status === s ? "selected" : ""}>${s}</option>`)
+                    .map((s) => `<option value="${s}" ${o.status === s ? "selected" : ""}>${s}</option>`)
                     .join("")}
                 </select>
               </td>
@@ -361,7 +431,7 @@ async function loadOrders() {
               </td>
 
               <td>
-                <button class="btn saveOrder">Speichern</button>
+                <button class="btn saveOrder" type="button">Speichern</button>
               </td>
             </tr>
           `)
@@ -377,21 +447,33 @@ async function loadOrders() {
 
 async function saveOrder(e) {
   const tr = e.target.closest("tr");
+  const id = tr.dataset.id;
   const obj = {};
 
   tr.querySelectorAll("[data-name]").forEach((el) => {
     obj[el.dataset.name] = el.value;
   });
 
-  const { error } = await window.lfcSupabase
-    .from("orders")
-    .update(obj)
-    .eq("id", tr.dataset.id);
+  const saveButton = e.target;
+  saveButton.disabled = true;
+  saveButton.textContent = "Speichere…";
 
-  if (error) {
-    alert(error.message);
-  } else {
+  try {
+    const { error } = await window.lfcSupabase
+      .from("orders")
+      .update(obj)
+      .eq("id", id);
+
+    if (error) throw error;
+
     setAdminStatus("✅ Auftrag gespeichert.");
+  } catch (error) {
+    console.error(error);
+    alert(error.message || String(error));
+    setAdminStatus("❌ Fehler beim Speichern des Auftrags.");
+  } finally {
+    saveButton.disabled = false;
+    saveButton.textContent = "Speichern";
   }
 }
 
@@ -442,7 +524,9 @@ async function loadContacts() {
 async function loadTab() {
   if (currentTab === "vehicles") return loadVehicles();
   if (currentTab === "orders") return loadOrders();
-  return loadContacts();
+  if (currentTab === "contacts") return loadContacts();
+
+  return loadVehicles();
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
