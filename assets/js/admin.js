@@ -1,4 +1,5 @@
 let currentTab = "vehicles";
+let vehicleGroupsCache = [];
 
 function escHtml(str) {
   return String(str ?? "").replace(/[&<>"']/g, function (m) {
@@ -89,6 +90,36 @@ function renderImagePreview(imageText) {
   `;
 }
 
+function renderGroupOptions(selectedGroupId) {
+  const selected = selectedGroupId ? String(selectedGroupId) : "";
+
+  return `
+    <option value="">Ohne Gruppe</option>
+    ${vehicleGroupsCache
+      .map((g) => {
+        const id = String(g.id);
+        return `
+          <option value="${escHtml(id)}" ${id === selected ? "selected" : ""}>
+            ${escHtml(g.name)}
+          </option>
+        `;
+      })
+      .join("")}
+  `;
+}
+
+async function loadVehicleGroups() {
+  const { data, error } = await window.lfcSupabase
+    .from("vehicle_groups")
+    .select("id,name,sort_order,is_active")
+    .order("sort_order", { ascending: true })
+    .order("name", { ascending: true });
+
+  if (error) throw error;
+
+  vehicleGroupsCache = data || [];
+}
+
 async function requireLogin() {
   const { data, error } = await window.lfcSupabase.auth.getUser();
 
@@ -121,127 +152,147 @@ async function loadVehicles() {
   c.innerHTML = "Lade Katalog…";
   setAdminStatus("");
 
-  const { data, error } = await window.lfcSupabase
-    .from("vehicle_catalog_entries")
-    .select(`
-      id,
-      craft_key,
-      display_name,
-      blueprint_name,
-      description,
-      price,
-      trunk_size,
-      is_visible,
-      sort_order,
-      vehicle_images (
+  try {
+    await loadVehicleGroups();
+
+    const { data, error } = await window.lfcSupabase
+      .from("vehicle_catalog_entries")
+      .select(`
         id,
-        image_url,
+        craft_key,
+        display_name,
+        blueprint_name,
+        description,
+        price,
+        group_id,
+        trunk_size,
+        is_visible,
         sort_order,
-        is_primary
-      )
-    `)
-    .order("display_name", { ascending: true });
+        vehicle_images (
+          id,
+          image_url,
+          sort_order,
+          is_primary
+        )
+      `)
+      .order("display_name", { ascending: true });
 
-  if (error) {
-    c.textContent = "Fehler: " + error.message;
-    return;
-  }
+    if (error) throw error;
 
-  c.innerHTML = `
-    <table class="admin-table">
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Preis</th>
-          <th>Sichtbar</th>
-          <th>Beschreibung</th>
-          <th>Kofferraum</th>
-          <th>Bilder</th>
-          <th>Aktion</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${(data || [])
-          .map((v) => {
-            const imageText = imagesToTextarea(v.vehicle_images || []);
+    c.innerHTML = `
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>Fahrzeug</th>
+            <th>Gruppe</th>
+            <th>Preis</th>
+            <th>Sichtbar</th>
+            <th>Beschreibung</th>
+            <th>Kofferraum</th>
+            <th>Bilder</th>
+            <th>Aktion</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${(data || [])
+            .map((v) => {
+              const imageText = imagesToTextarea(v.vehicle_images || []);
 
-            return `
-              <tr data-id="${escHtml(v.id)}">
-                <td>
-                  <div class="small">${escHtml(v.craft_key)}</div>
+              return `
+                <tr data-id="${escHtml(v.id)}">
+                  <td>
+                    <div class="small">${escHtml(v.craft_key)}</div>
 
-                  <div class="small">Anzeigename</div>
-                  ${input(v.display_name || "", "display_name")}
+                    <div class="small">Anzeigename / Katalogtitel</div>
+                    ${input(v.display_name || "", "display_name")}
 
-                  <div class="small">Bauplan</div>
-                  ${input(v.blueprint_name || "", "blueprint_name")}
-                </td>
+                    <div class="small">
+                      Dieser Anzeigename wird im öffentlichen Katalog als <strong>shop-card-title</strong> verwendet.
+                    </div>
 
-                <td>
-                  <div class="small">Preis</div>
-                  ${input(v.price ?? 0, "price", "number")}
+                    <div class="small">Bauplan</div>
+                    ${input(v.blueprint_name || "", "blueprint_name")}
+                  </td>
 
-                  <div class="small">Sortierung</div>
-                  ${input(v.sort_order ?? 1000, "sort_order", "number")}
-                </td>
+                  <td>
+                    <div class="small">Gruppe</div>
+                    <select class="input" data-name="group_id">
+                      ${renderGroupOptions(v.group_id)}
+                    </select>
+                    <div class="small">
+                      Fahrzeuge ohne Gruppe werden im öffentlichen Katalog nicht angezeigt.
+                    </div>
+                  </td>
 
-                <td>
-                  <label class="small">
-                    <input data-name="is_visible" type="checkbox" ${v.is_visible ? "checked" : ""}>
-                    sichtbar
-                  </label>
-                </td>
+                  <td>
+                    <div class="small">Preis</div>
+                    ${input(v.price ?? 0, "price", "number")}
 
-                <td>
-                  <textarea class="input" data-name="description">${escHtml(v.description || "")}</textarea>
-                </td>
+                    <div class="small">Sortierung</div>
+                    ${input(v.sort_order ?? 1000, "sort_order", "number")}
+                  </td>
 
-                <td>
-                  ${input(v.trunk_size || "", "trunk_size")}
-                </td>
+                  <td>
+                    <label class="small">
+                      <input data-name="is_visible" type="checkbox" ${v.is_visible ? "checked" : ""}>
+                      sichtbar
+                    </label>
+                  </td>
 
-                <td class="img-editor">
-                  <div class="small">
-                    Bild-URLs, eine URL pro Zeile.<br>
-                    Nur https:// Links sind gültig.<br>
-                    Erstes Bild = Hauptbild.
-                  </div>
+                  <td>
+                    <textarea class="input" data-name="description">${escHtml(v.description || "")}</textarea>
+                  </td>
 
-                  <textarea class="input imageUrls" data-name="_image_urls">${escHtml(imageText)}</textarea>
+                  <td>
+                    ${input(v.trunk_size || "", "trunk_size")}
+                  </td>
 
-                  <div class="imagePreview">
-                    ${renderImagePreview(imageText)}
-                  </div>
-                </td>
+                  <td class="img-editor">
+                    <div class="small">
+                      Bild-URLs, eine URL pro Zeile.<br>
+                      Nur https:// Links sind gültig.<br>
+                      Erstes Bild = Hauptbild.
+                    </div>
 
-                <td>
-                  <div class="admin-row-actions">
-                    <button class="btn previewImages" type="button">Vorschau</button>
-                    <button class="btn saveVehicle" type="button">Speichern</button>
-                  </div>
-                </td>
-              </tr>
-            `;
-          })
-          .join("")}
-      </tbody>
-    </table>
-  `;
+                    <textarea class="input imageUrls" data-name="_image_urls">${escHtml(imageText)}</textarea>
 
-  document.querySelectorAll(".saveVehicle").forEach((btn) => {
-    btn.onclick = saveVehicle;
-  });
+                    <div class="imagePreview">
+                      ${renderImagePreview(imageText)}
+                    </div>
+                  </td>
 
-  document.querySelectorAll(".previewImages").forEach((btn) => {
-    btn.onclick = updateImagePreviewForRow;
-  });
+                  <td>
+                    <div class="admin-row-actions">
+                      <button class="btn previewImages" type="button">Vorschau</button>
+                      <button class="btn saveVehicle" type="button">Speichern</button>
+                    </div>
+                  </td>
+                </tr>
+              `;
+            })
+            .join("")}
+        </tbody>
+      </table>
+    `;
 
-  document.querySelectorAll(".imageUrls").forEach((textarea) => {
-    textarea.addEventListener("input", () => {
-      const tr = textarea.closest("tr");
-      updateImagePreview(tr);
+    document.querySelectorAll(".saveVehicle").forEach((btn) => {
+      btn.onclick = saveVehicle;
     });
-  });
+
+    document.querySelectorAll(".previewImages").forEach((btn) => {
+      btn.onclick = updateImagePreviewForRow;
+    });
+
+    document.querySelectorAll(".imageUrls").forEach((textarea) => {
+      textarea.addEventListener("input", () => {
+        const tr = textarea.closest("tr");
+        updateImagePreview(tr);
+      });
+    });
+  } catch (error) {
+    console.error(error);
+    c.textContent = "Fehler: " + (error.message || String(error));
+  }
 }
 
 function updateImagePreviewForRow(e) {
@@ -277,6 +328,8 @@ async function saveVehicle(e) {
       vehicleUpdate[name] = Number(el.value || 0);
     } else if (name === "sort_order") {
       vehicleUpdate[name] = Number(el.value || 1000);
+    } else if (name === "group_id") {
+      vehicleUpdate[name] = el.value ? el.value : null;
     } else {
       vehicleUpdate[name] = el.value;
     }
@@ -336,7 +389,7 @@ async function saveVehicle(e) {
       if (insertImagesError) throw insertImagesError;
     }
 
-    setAdminStatus("✅ Fahrzeug und Bilder gespeichert.");
+    setAdminStatus("✅ Fahrzeug, Gruppe und Bilder gespeichert.");
     updateImagePreview(tr);
   } catch (error) {
     console.error(error);
