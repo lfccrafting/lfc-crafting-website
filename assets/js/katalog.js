@@ -12,17 +12,6 @@
   const TAB_RECIPES = "recipes";
   const TAB_ITEMS = "recipe_items";
 
-  /*
-    Gewünschter Bild-Prefix:
-    relative Bildpfade aus der Datenbank werden damit erweitert.
-    Beispiel:
-      bilder/auto.png
-    wird zu:
-      https://github.com/BattleNogare/brauntech-solutions/blob/98535b141656d9b4fa82405dee9fba529b8d0539/katalog/bilder/auto.png
-  */
-  const GITHUB_IMAGE_BASE =
-    "https://github.com/BattleNogare/brauntech-solutions/blob/98535b141656d9b4fa82405dee9fba529b8d0539/katalog/";
-
   let vehicles = [];
   let families = [];
   let cards = [];
@@ -87,24 +76,16 @@
     return String(name || "").replace(/\s*Bauplan\s*$/i, "").trim();
   }
 
-  function isAbsoluteOrSpecialUrl(url) {
-    return (
-      /^https?:\/\//i.test(url) ||
-      /^data:/i.test(url) ||
-      /^blob:/i.test(url)
-    );
-  }
-
   function normalizeImageUrl(url) {
-    let s = String(url || "").trim();
+    const s = String(url || "").trim();
+
     if (!s) return "";
 
-    if (isAbsoluteOrSpecialUrl(s)) return s;
+  // Nur echte HTTPS-Bildpfade sind gültig.
+  // Relative Pfade, GitHub-Blob-Pfade, http://, data: und blob: werden ignoriert.
+    if (!/^https:\/\//i.test(s)) return "";
 
-    s = s.replace(/^\.?\//, "");
-    s = s.replace(/^katalog\//i, "");
-
-    return GITHUB_IMAGE_BASE + s;
+    return s;
   }
 
   function getVehicleImages(v) {
