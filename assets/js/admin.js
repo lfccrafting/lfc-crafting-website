@@ -554,7 +554,6 @@ function buildOrdersTable(data, mode) {
           <th>Gesamtbetrag Rechnung</th>
           <th>Restbetrag Rechnung</th>
           <th>Zusätzliche Infos</th>
-          <th>Rechnungsstatus</th>
           <th>Aktion</th>
         </tr>
       </thead>
