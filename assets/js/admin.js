@@ -1,7 +1,7 @@
 let currentTab = "vehicles";
 
 const GITHUB_IMAGE_BASE =
-  "https://github.com/BattleNogare/brauntech-solutions/blob/98535b141656d9b4fa82405dee9fba529b8d0539/katalog/";
+  "https://github.com/BattleNogare/brauntech-solutions/blob//katalog/";
 
 function input(value, name, type = "text") {
   return `<input class="input" data-name="${name}" type="${type}" value="${escHtml(value ?? "")}">`;
