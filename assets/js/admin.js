@@ -171,21 +171,73 @@ function renderProfileOptions(selectedUserId) {
   `;
 }
 
-function renderStatusOptions(selected) {
-  const statuses = [
-    "new",
-    "accepted",
-    "in_progress",
-    "waiting_for_customer",
-    "ready",
-    "completed",
-    "rejected",
-    "cancelled"
-  ];
+const ORDER_STATUS_OPTIONS = [
+  {
+    label: "Bestellung ist eingegangen",
+    status: "new",
+    publicLabel: "Bestellung ist eingegangen"
+  },
+  {
+    label: "Warte auf Anzahlung",
+    status: "waiting_for_customer",
+    publicLabel: "Warte auf Anzahlung"
+  },
+  {
+    label: "In Warteschlange",
+    status: "accepted",
+    publicLabel: "In Warteschlange"
+  },
+  {
+    label: "In Produktion",
+    status: "in_progress",
+    publicLabel: "In Produktion"
+  },
+  {
+    label: "Abholbereit",
+    status: "ready",
+    publicLabel: "Abholbereit"
+  },
+  {
+    label: "Storniert",
+    status: "cancelled",
+    publicLabel: "Storniert"
+  }
+];
 
-  return statuses
-    .map((s) => `<option value="${s}" ${selected === s ? "selected" : ""}>${s}</option>`)
+function optionKey(status, publicLabel) {
+  const found = ORDER_STATUS_OPTIONS.find((x) => {
+    return x.status === status && x.publicLabel === publicLabel;
+  });
+
+  if (found) return found.label;
+
+  const fallback = ORDER_STATUS_OPTIONS.find((x) => x.status === status);
+  return fallback ? fallback.label : "Bestellung ist eingegangen";
+}
+
+function renderStatusOptions(status, publicLabel) {
+  const selectedKey = optionKey(status, publicLabel);
+
+  return ORDER_STATUS_OPTIONS
+    .map((x) => {
+      return `
+        <option value="${escHtml(x.label)}" ${selectedKey === x.label ? "selected" : ""}>
+          ${escHtml(x.label)}
+        </option>
+      `;
+    })
     .join("");
+}
+
+function getStatusPayloadFromLabel(label) {
+  const found =
+    ORDER_STATUS_OPTIONS.find((x) => x.label === label) ||
+    ORDER_STATUS_OPTIONS[0];
+
+  return {
+    status: found.status,
+    public_status_label: found.publicLabel
+  };
 }
 
 async function loadVehicleGroups() {
@@ -718,6 +770,7 @@ async function loadOrdersByMode(mode) {
         customer_contact,
         production_summary,
         status,
+        public_status_label,
         deposit_required,
         deposit_amount,
         deposit_received,
@@ -726,7 +779,6 @@ async function loadOrdersByMode(mode) {
         invoice_remaining,
         total_price,
         public_info,
-        public_status_label,
         invoice_status,
         internal_notes,
         order_items (
