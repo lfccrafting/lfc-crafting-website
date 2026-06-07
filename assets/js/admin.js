@@ -1,8 +1,5 @@
 let currentTab = "vehicles";
 
-const GITHUB_IMAGE_BASE =
-  "https://github.com/BattleNogare/brauntech-solutions/blob//katalog/";
-
 function input(value, name, type = "text") {
   return `<input class="input" data-name="${name}" type="${type}" value="${escHtml(value ?? "")}">`;
 }
@@ -15,35 +12,15 @@ function setAdminStatus(message, type = "") {
   if (type) el.classList.add(type);
 }
 
-function isAbsoluteOrSpecialUrl(url) {
-  return (
-    /^https?:\/\//i.test(url) ||
-    /^data:/i.test(url) ||
-    /^blob:/i.test(url)
-  );
-}
-
 function normalizePreviewImageUrl(url) {
-  let s = String(url || "").trim();
+  const s = String(url || "").trim();
+
   if (!s) return "";
 
-  if (isAbsoluteOrSpecialUrl(s)) return s;
+  // Nur HTTPS ist erlaubt.
+  if (!/^https:\/\//i.test(s)) return "";
 
-  s = s.replace(/^\.?\//, "");
-  s = s.replace(/^katalog\//i, "");
-
-  return GITHUB_IMAGE_BASE + s;
-}
-
-function imagesToTextarea(images) {
-  return (images || [])
-    .slice()
-    .sort((a, b) => {
-      return Number(a.sort_order || 0) - Number(b.sort_order || 0);
-    })
-    .map((img) => String(img.image_url || "").trim())
-    .filter(Boolean)
-    .join("\n");
+  return s;
 }
 
 function parseImageTextarea(value) {
@@ -53,6 +30,7 @@ function parseImageTextarea(value) {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
+    .filter((url) => /^https:\/\//i.test(url))
     .filter((url) => {
       const key = url.toLowerCase();
       if (seen.has(key)) return false;
@@ -116,7 +94,6 @@ async function loadVehicles() {
       price,
       trunk_size,
       is_visible,
-      is_archived,
       sort_order,
       vehicle_images (
         id,
@@ -170,11 +147,6 @@ async function loadVehicles() {
                     <input data-name="is_visible" type="checkbox" ${v.is_visible ? "checked" : ""}>
                     sichtbar
                   </label>
-                  <br>
-                  <label class="small">
-                    <input data-name="is_archived" type="checkbox" ${v.is_archived ? "checked" : ""}>
-                    archiviert
-                  </label>
                 </td>
 
                 <td>
@@ -188,8 +160,8 @@ async function loadVehicles() {
                 <td class="img-editor">
                   <div class="small">
                     Bild-URLs, eine URL pro Zeile.<br>
-                    Erstes Bild = Hauptbild.<br>
-                    Relative Pfade werden im Katalog mit GitHub-Prefix geladen.
+                    Nur https:// Links sind gültig.<br>
+                    Erstes Bild = Hauptbild.
                   </div>
 
                   <textarea class="input imageUrls" data-name="_image_urls">${escHtml(imageText)}</textarea>
