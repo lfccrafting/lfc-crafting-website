@@ -79,7 +79,7 @@
   function normalizeImageUrl(url) {
     const s = String(url || "").trim();
 
-    if (!s) return "";
+    if (!s) return ""; 
 
   // Nur echte HTTPS-Bildpfade sind gültig.
   // Relative Pfade, GitHub-Blob-Pfade, http://, data: und blob: werden ignoriert.
