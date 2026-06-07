@@ -1,0 +1,147 @@
+/* =========================================
+   LFC BACKGROUND (Neon-Orange / Tech-Scan)
+   - Kein Grün
+   - Helleres Neon + Twinkle Points + Rechteck-Orbits
+========================================= */
+
+html, body{
+  height:100%;
+}
+
+body{
+  /* etwas heller als vorher */
+  background:
+    radial-gradient(circle at top, #1a0e00 0%, #090400 52%, #000 100%);
+}
+
+/* WICHTIG: verhindert "z-index verschwindet hinter html" */
+body{
+  position:relative;
+  z-index:0;
+  isolation:isolate;
+}
+
+/* Neon Pulse Grid */
+body::before{
+  content:"";
+  position:fixed;
+  inset:-70px;
+  z-index:-5;
+  pointer-events:none;
+
+  background-image:
+    linear-gradient(to right, rgba(255,175,35,0.10) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255,175,35,0.10) 1px, transparent 1px),
+    linear-gradient(to right, rgba(255,210,95,0.05) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255,210,95,0.05) 1px, transparent 1px);
+
+  background-size: 90px 90px, 90px 90px, 34px 34px, 34px 34px;
+  opacity:.42;                 /* heller */
+  mix-blend-mode:screen;
+  animation: lfc-grid-drift 55s linear infinite;
+}
+
+@keyframes lfc-grid-drift{
+  0%{ background-position: 0 0, 0 0, 0 0, 0 0; filter:hue-rotate(0deg) }
+  50%{ background-position: 60px -20px, -40px 55px, 20px 10px, -25px -15px; filter:hue-rotate(-6deg) }
+  100%{ background-position: 0 0, 0 0, 0 0, 0 0; filter:hue-rotate(0deg) }
+}
+
+/* Scanlines: subtiler */
+body::after{
+  content:"";
+  position:fixed;
+  inset:0;
+  z-index:-1;
+  pointer-events:none;
+
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(0,0,0,0.42) 0,
+    rgba(0,0,0,0.42) 1px,
+    transparent 7px
+  );
+  opacity:.08; /* deutlich weniger dunkel */
+}
+
+/* Punkte Container */
+#bt-points{
+  position:fixed;
+  inset:0;
+  z-index:-3;
+  pointer-events:none;
+  perspective: 1200px;
+}
+
+/* Layer (JS erzeugt Hintergrundbilder) */
+.bt-points-layer{
+  position:absolute;
+  inset:0;
+  mix-blend-mode: screen;
+  opacity:0;
+  animation: lfc-point-twinkle 10s infinite ease-in-out;
+  will-change: transform, opacity;
+}
+
+/* Twinkle (blinkend), stärker als vorher */
+@keyframes lfc-point-twinkle{
+  0%,10%   {opacity:0;   filter: drop-shadow(0 0 3px rgba(255,175,35,.35)) drop-shadow(0 0 10px rgba(255,175,35,.18));}
+  18%,34%  {opacity:1;   filter: drop-shadow(0 0 6px rgba(255,175,35,.60)) drop-shadow(0 0 18px rgba(255,175,35,.28));}
+  46%,60%  {opacity:.35; filter: drop-shadow(0 0 4px rgba(255,175,35,.45)) drop-shadow(0 0 12px rgba(255,175,35,.20));}
+  70%,84%  {opacity:1;   filter: drop-shadow(0 0 7px rgba(255,210,95,.55)) drop-shadow(0 0 20px rgba(255,175,35,.26));}
+  92%,100% {opacity:0;   filter: drop-shadow(0 0 3px rgba(255,175,35,.35)) drop-shadow(0 0 10px rgba(255,175,35,.18));}
+}
+
+/* Orbits Container */
+#bt-glow-orbits{
+  position:fixed;
+  inset:0;
+  z-index:-4;
+  pointer-events:none;
+}
+
+/* Rechteckige “Arc”-Panels (statt runde Ringe) */
+.bt-orbit{
+  position:absolute;
+
+  /* Rechteck statt Kreis */
+  border-radius: 2px; /* sharp/minimal, nicht rund */
+  border: 1px solid rgba(255,175,35,0.30);
+
+  /* Neon Glow */
+  box-shadow:
+    0 0 18px rgba(255,175,35,0.32),
+    0 0 44px rgba(255,210,95,0.14);
+
+  opacity:.38;
+  mix-blend-mode: screen;
+
+  /* Rotation + Parallax-Move (Keyframes) */
+  transform-origin:center;
+  animation: lfc-orbit 70s linear infinite;
+
+  /* leichte Unschärfe für Glow */
+  will-change: transform, filter;
+}
+
+/* animiert mit zusätzlichem Start-Rotation-Offset */
+@keyframes lfc-orbit{
+  0%{
+    transform: translate3d(0,0,0) rotate(var(--orbit-rot, 0deg));
+    filter: blur(.10px);
+  }
+  50%{
+    transform: translate3d(var(--orbit-offset-x, 14px), var(--orbit-offset-y, -8px), 0)
+              rotate(calc(var(--orbit-rot, 0deg) + 180deg));
+    filter: blur(.25px);
+  }
+  100%{
+    transform: translate3d(0,0,0) rotate(calc(var(--orbit-rot, 0deg) + 360deg));
+    filter: blur(.10px);
+  }
+}
+
+#bt-glow-orbits{ z-index:-4; }
+#bt-points{ z-index:-2; }       /* höher als scanlines/grid */
+body::after{ z-index:-3; }      /* scanlines runter */
+body::before{ z-index:-5; }     /* grid ganz hinten */
