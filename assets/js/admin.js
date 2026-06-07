@@ -360,12 +360,22 @@ async function saveVehicle(e) {
   setAdminStatus("");
 
   try {
-    const { error: vehicleError } = await window.lfcSupabase
+    console.log("Speichere Fahrzeug:", id, vehicleUpdate);
+
+    const { data: updatedRows, error: vehicleError } = await window.lfcSupabase
       .from("vehicle_catalog_entries")
       .update(vehicleUpdate)
-      .eq("id", id);
+      .eq("id", id)
+      .select("id, display_name, group_id, price, sort_order, is_visible")
+      .maybeSingle();
 
     if (vehicleError) throw vehicleError;
+
+    if (!updatedRows) {
+      throw new Error(
+        "Fahrzeug wurde nicht aktualisiert. Wahrscheinlich blockiert RLS die Änderung oder die ID wurde nicht gefunden."
+      );
+    }
 
     const { error: deleteImagesError } = await window.lfcSupabase
       .from("vehicle_images")
@@ -389,7 +399,10 @@ async function saveVehicle(e) {
       if (insertImagesError) throw insertImagesError;
     }
 
-    setAdminStatus("✅ Fahrzeug, Gruppe und Bilder gespeichert.");
+    setAdminStatus(
+      "✅ Fahrzeug gespeichert. Anzeigename jetzt: " + updatedRows.display_name
+    );
+
     updateImagePreview(tr);
   } catch (error) {
     console.error(error);
