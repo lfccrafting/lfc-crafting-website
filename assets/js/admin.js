@@ -5,6 +5,39 @@ let currentUserRole = null;
 
 const FINISHED_STATUSES = ["completed", "cancelled", "rejected"];
 
+const ORDER_STATUS_OPTIONS = [
+  {
+    label: "Bestellung ist eingegangen",
+    status: "new",
+    publicLabel: "Bestellung ist eingegangen"
+  },
+  {
+    label: "Warte auf Anzahlung",
+    status: "waiting_for_customer",
+    publicLabel: "Warte auf Anzahlung"
+  },
+  {
+    label: "In Warteschlange",
+    status: "accepted",
+    publicLabel: "In Warteschlange"
+  },
+  {
+    label: "In Produktion",
+    status: "in_progress",
+    publicLabel: "In Produktion"
+  },
+  {
+    label: "Abholbereit",
+    status: "ready",
+    publicLabel: "Abholbereit"
+  },
+  {
+    label: "Storniert",
+    status: "cancelled",
+    publicLabel: "Storniert"
+  }
+];
+
 function escHtml(str) {
   return String(str ?? "").replace(/[&<>"']/g, function (m) {
     return {
@@ -78,7 +111,9 @@ function euro(value) {
 function normalizePreviewImageUrl(url) {
   const s = String(url || "").trim();
   if (!s) return "";
+
   if (!/^https:\/\//i.test(s)) return "";
+
   return s;
 }
 
@@ -170,39 +205,6 @@ function renderProfileOptions(selectedUserId) {
       .join("")}
   `;
 }
-
-const ORDER_STATUS_OPTIONS = [
-  {
-    label: "Bestellung ist eingegangen",
-    status: "new",
-    publicLabel: "Bestellung ist eingegangen"
-  },
-  {
-    label: "Warte auf Anzahlung",
-    status: "waiting_for_customer",
-    publicLabel: "Warte auf Anzahlung"
-  },
-  {
-    label: "In Warteschlange",
-    status: "accepted",
-    publicLabel: "In Warteschlange"
-  },
-  {
-    label: "In Produktion",
-    status: "in_progress",
-    publicLabel: "In Produktion"
-  },
-  {
-    label: "Abholbereit",
-    status: "ready",
-    publicLabel: "Abholbereit"
-  },
-  {
-    label: "Storniert",
-    status: "cancelled",
-    publicLabel: "Storniert"
-  }
-];
 
 function optionKey(status, publicLabel) {
   const found = ORDER_STATUS_OPTIONS.find((x) => {
@@ -302,7 +304,7 @@ async function requireLogin() {
 
 /* =========================================================
    KATALOG
-   ========================================================= */
+========================================================= */
 
 async function loadVehicles() {
   const c = document.getElementById("content");
@@ -568,7 +570,7 @@ async function saveVehicle(e) {
 
 /* =========================================================
    AUFTRÄGE
-   ========================================================= */
+========================================================= */
 
 function orderItemsSummary(order) {
   const items = order.order_items || [];
@@ -591,7 +593,7 @@ function buildOrdersTable(data, mode) {
   const canEditAll = currentUserRole === "admin" && isFinishedMode;
 
   return `
-    <table class="admin-table">
+    <table class="admin-table orders-table">
       <thead>
         <tr>
           <th>Bestell-Datum</th>
@@ -606,6 +608,8 @@ function buildOrdersTable(data, mode) {
           <th>Gesamtbetrag Rechnung</th>
           <th>Restbetrag Rechnung</th>
           <th>Zusätzliche Infos</th>
+          <th>Rechnungsstatus</th>
+          <th>Aktion</th>
         </tr>
       </thead>
       <tbody>
@@ -652,8 +656,8 @@ function buildOrdersTable(data, mode) {
                 <td>
                   ${
                     openEditable || rowEditableAll
-                      ? `<select class="input" data-name="status">${renderStatusOptions(o.status)}</select>`
-                      : escHtml(o.status || "")
+                      ? `<select class="input" data-name="_status_label">${renderStatusOptions(o.status, o.public_status_label)}</select>`
+                      : escHtml(o.public_status_label || o.status || "")
                   }
                 </td>
 
@@ -688,12 +692,8 @@ function buildOrdersTable(data, mode) {
                 <td>
                   ${
                     openEditable || rowEditableAll
-                      ? `<select class="input" data-name="assigned_to">${renderProfileOptions(o.assigned_to)}</select>`
-                      : escHtml(
-                          profilesCache.find((p) => p.id === o.assigned_to)?.display_name ||
-                          profilesCache.find((p) => p.id === o.assigned_to)?.email ||
-                          ""
-                        )
+                      ? input(o.responsible_text || "", "responsible_text")
+                      : escHtml(o.responsible_text || "")
                   }
                 </td>
 
@@ -775,6 +775,7 @@ async function loadOrdersByMode(mode) {
         deposit_amount,
         deposit_received,
         assigned_to,
+        responsible_text,
         invoice_total,
         invoice_remaining,
         total_price,
@@ -823,6 +824,13 @@ async function saveOrder(e) {
   tr.querySelectorAll("[data-name]").forEach((el) => {
     const name = el.dataset.name;
 
+    if (name === "_status_label") {
+      const payload = getStatusPayloadFromLabel(el.value);
+      obj.status = payload.status;
+      obj.public_status_label = payload.public_status_label;
+      return;
+    }
+
     if (el.type === "checkbox") {
       obj[name] = el.checked;
     } else if (
@@ -846,8 +854,10 @@ async function saveOrder(e) {
     const allowed = [
       "deposit_required",
       "deposit_received",
+      "responsible_text",
       "assigned_to",
       "status",
+      "public_status_label",
       "public_info"
     ];
 
@@ -866,7 +876,7 @@ async function saveOrder(e) {
       .from("orders")
       .update(obj)
       .eq("id", id)
-      .select("id, order_number, status")
+      .select("id, order_number, status, public_status_label")
       .maybeSingle();
 
     if (error) throw error;
@@ -877,10 +887,7 @@ async function saveOrder(e) {
 
     setAdminStatus("✅ Auftrag gespeichert: " + data.order_number);
 
-    if (
-      currentTab === "openOrders" &&
-      FINISHED_STATUSES.includes(data.status)
-    ) {
+    if (currentTab === "openOrders" && FINISHED_STATUSES.includes(data.status)) {
       await loadOrdersByMode("open");
     }
   } catch (error) {
@@ -895,7 +902,7 @@ async function saveOrder(e) {
 
 /* =========================================================
    KONTAKTANFRAGEN
-   ========================================================= */
+========================================================= */
 
 async function loadContacts() {
   const c = document.getElementById("content");
@@ -943,7 +950,7 @@ async function loadContacts() {
 
 /* =========================================================
    TABS
-   ========================================================= */
+========================================================= */
 
 async function loadTab() {
   if (currentTab === "vehicles") return loadVehicles();
