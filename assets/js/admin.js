@@ -5,7 +5,7 @@ let currentUserRole = null;
 
 const FINISHED_STATUSES = ["completed", "cancelled", "rejected"];
 
-const ORDER_STATUS_OPTIONS = [
+const ORDER_STATUS_OPTIONS = [ 
   {
     label: "Bestellung ist eingegangen",
     status: "new",
