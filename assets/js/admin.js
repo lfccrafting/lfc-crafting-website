@@ -1,5 +1,9 @@
 let currentTab = "vehicles";
 let vehicleGroupsCache = [];
+let profilesCache = [];
+let currentUserRole = null;
+
+const FINISHED_STATUSES = ["completed", "cancelled", "rejected"];
 
 function escHtml(str) {
   return String(str ?? "").replace(/[&<>"']/g, function (m) {
@@ -13,8 +17,12 @@ function escHtml(str) {
   });
 }
 
-function input(value, name, type = "text") {
-  return `<input class="input" data-name="${name}" type="${type}" value="${escHtml(value ?? "")}">`;
+function input(value, name, type = "text", extra = "") {
+  return `<input class="input" data-name="${name}" type="${type}" value="${escHtml(value ?? "")}" ${extra}>`;
+}
+
+function textarea(value, name, extra = "") {
+  return `<textarea class="input" data-name="${name}" ${extra}>${escHtml(value || "")}</textarea>`;
 }
 
 function setAdminStatus(message, type = "") {
@@ -27,14 +35,50 @@ function setAdminStatus(message, type = "") {
   if (type) el.classList.add(type);
 }
 
+function formatDate(value) {
+  if (!value) return "";
+  try {
+    return new Date(value).toLocaleString("de-DE");
+  } catch {
+    return String(value);
+  }
+}
+
+function formatDateInput(value) {
+  if (!value) return "";
+  try {
+    const d = new Date(value);
+    const pad = (n) => String(n).padStart(2, "0");
+    return (
+      d.getFullYear() +
+      "-" +
+      pad(d.getMonth() + 1) +
+      "-" +
+      pad(d.getDate()) +
+      "T" +
+      pad(d.getHours()) +
+      ":" +
+      pad(d.getMinutes())
+    );
+  } catch {
+    return "";
+  }
+}
+
+function euro(value) {
+  const n = Number(value || 0);
+  return n.toLocaleString("de-DE", {
+    style: "currency",
+    currency: "EUR",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0
+  });
+}
+
 function normalizePreviewImageUrl(url) {
   const s = String(url || "").trim();
-
   if (!s) return "";
-
-  // Nur HTTPS-Bildlinks sind gültig.
   if (!/^https:\/\//i.test(s)) return "";
-
   return s;
 }
 
@@ -108,6 +152,42 @@ function renderGroupOptions(selectedGroupId) {
   `;
 }
 
+function renderProfileOptions(selectedUserId) {
+  const selected = selectedUserId ? String(selectedUserId) : "";
+
+  return `
+    <option value="">Nicht zugewiesen</option>
+    ${profilesCache
+      .map((p) => {
+        const id = String(p.id);
+        const label = p.display_name || p.email || id;
+        return `
+          <option value="${escHtml(id)}" ${id === selected ? "selected" : ""}>
+            ${escHtml(label)}
+          </option>
+        `;
+      })
+      .join("")}
+  `;
+}
+
+function renderStatusOptions(selected) {
+  const statuses = [
+    "new",
+    "accepted",
+    "in_progress",
+    "waiting_for_customer",
+    "ready",
+    "completed",
+    "rejected",
+    "cancelled"
+  ];
+
+  return statuses
+    .map((s) => `<option value="${s}" ${selected === s ? "selected" : ""}>${s}</option>`)
+    .join("");
+}
+
 async function loadVehicleGroups() {
   const { data, error } = await window.lfcSupabase
     .from("vehicle_groups")
@@ -118,6 +198,19 @@ async function loadVehicleGroups() {
   if (error) throw error;
 
   vehicleGroupsCache = data || [];
+}
+
+async function loadProfiles() {
+  const { data, error } = await window.lfcSupabase
+    .from("profiles")
+    .select("id,email,display_name,role,is_active")
+    .eq("is_active", true)
+    .in("role", ["employee", "manager", "admin"])
+    .order("display_name", { ascending: true });
+
+  if (error) throw error;
+
+  profilesCache = data || [];
 }
 
 async function requireLogin() {
@@ -141,11 +234,23 @@ async function requireLogin() {
     return false;
   }
 
+  currentUserRole = profile.role;
+
   document.getElementById("authStatus").textContent =
     `✅ Eingeloggt als ${data.user.email} (${profile.role})`;
 
+  if (currentUserRole !== "admin") {
+    document.querySelectorAll(".admin-only-tab").forEach((el) => {
+      el.style.display = "none";
+    });
+  }
+
   return true;
 }
+
+/* =========================================================
+   KATALOG
+   ========================================================= */
 
 async function loadVehicles() {
   const c = document.getElementById("content");
@@ -240,7 +345,7 @@ async function loadVehicles() {
                   </td>
 
                   <td>
-                    <textarea class="input" data-name="description">${escHtml(v.description || "")}</textarea>
+                    ${textarea(v.description || "", "description")}
                   </td>
 
                   <td>
@@ -360,13 +465,11 @@ async function saveVehicle(e) {
   setAdminStatus("");
 
   try {
-    console.log("Speichere Fahrzeug:", id, vehicleUpdate);
-
     const { data: updatedRows, error: vehicleError } = await window.lfcSupabase
       .from("vehicle_catalog_entries")
       .update(vehicleUpdate)
       .eq("id", id)
-      .select("id, display_name, group_id, price, sort_order, is_visible")
+      .select("id, display_name, group_id")
       .maybeSingle();
 
     if (vehicleError) throw vehicleError;
@@ -399,10 +502,7 @@ async function saveVehicle(e) {
       if (insertImagesError) throw insertImagesError;
     }
 
-    setAdminStatus(
-      "✅ Fahrzeug gespeichert. Anzeigename jetzt: " + updatedRows.display_name
-    );
-
+    setAdminStatus("✅ Fahrzeug, Gruppe und Bilder gespeichert.");
     updateImagePreview(tr);
   } catch (error) {
     console.error(error);
@@ -414,125 +514,325 @@ async function saveVehicle(e) {
   }
 }
 
-async function loadOrders() {
-  const c = document.getElementById("content");
-  c.innerHTML = "Lade Aufträge…";
-  setAdminStatus("");
+/* =========================================================
+   AUFTRÄGE
+   ========================================================= */
 
-  const { data, error } = await window.lfcSupabase
-    .from("orders")
-    .select(`
-      id,
-      created_at,
-      order_number,
-      status,
-      public_info,
-      public_status_label,
-      customer_name,
-      customer_contact,
-      internal_notes,
-      total_price
-    `)
-    .order("created_at", { ascending: false })
-    .limit(200);
+function orderItemsSummary(order) {
+  const items = order.order_items || [];
 
-  if (error) {
-    c.textContent = "Fehler: " + error.message;
-    return;
+  if (!items.length) {
+    return order.production_summary || order.public_info || "";
   }
 
-  c.innerHTML = `
+  return items
+    .map((item) => {
+      const qty = Number(item.quantity || 1);
+      return (qty !== 1 ? qty + "× " : "") + (item.title || "");
+    })
+    .filter(Boolean)
+    .join(", ");
+}
+
+function buildOrdersTable(data, mode) {
+  const isFinishedMode = mode === "finished";
+  const canEditAll = currentUserRole === "admin" && isFinishedMode;
+
+  return `
     <table class="admin-table">
       <thead>
         <tr>
-          <th>Auftrag</th>
-          <th>Kunde</th>
+          <th>Bestell-Datum</th>
+          <th>Bestellnummer</th>
+          <th>Kunden-Namen</th>
+          <th>Was wird hergestellt</th>
           <th>Status</th>
-          <th>Info</th>
-          <th>Notizen</th>
+          <th>Anzahlung</th>
+          <th>Anzahlungs-Betrag</th>
+          <th>Anzahlung erhalten?</th>
+          <th>Wer ist zuständig?</th>
+          <th>Gesamtbetrag Rechnung</th>
+          <th>Restbetrag Rechnung</th>
+          <th>Zusätzliche Infos</th>
+          <th>Rechnungsstatus</th>
           <th>Aktion</th>
         </tr>
       </thead>
       <tbody>
         ${(data || [])
-          .map((o) => `
-            <tr data-id="${escHtml(o.id)}">
-              <td>
-                <strong>${escHtml(o.order_number)}</strong>
-                <div class="small">${new Date(o.created_at).toLocaleString("de-DE")}</div>
-              </td>
+          .map((o) => {
+            const summary = orderItemsSummary(o);
+            const rowEditableAll = canEditAll;
+            const openEditable = !isFinishedMode;
 
-              <td>
-                ${escHtml(o.customer_name || "")}<br>
-                <span class="small">${escHtml(o.customer_contact || "")}</span>
-              </td>
+            return `
+              <tr data-id="${escHtml(o.id)}">
+                <td>
+                  ${
+                    rowEditableAll
+                      ? input(formatDateInput(o.created_at), "created_at", "datetime-local")
+                      : escHtml(formatDate(o.created_at))
+                  }
+                </td>
 
-              <td>
-                <select class="input" data-name="status">
-                  ${[
-                    "new",
-                    "accepted",
-                    "in_progress",
-                    "waiting_for_customer",
-                    "ready",
-                    "completed",
-                    "rejected",
-                    "cancelled"
-                  ]
-                    .map((s) => `<option value="${s}" ${o.status === s ? "selected" : ""}>${s}</option>`)
-                    .join("")}
-                </select>
-              </td>
+                <td>
+                  ${
+                    rowEditableAll
+                      ? input(o.order_number || "", "order_number")
+                      : `<strong>${escHtml(o.order_number || "")}</strong>`
+                  }
+                </td>
 
-              <td>
-                <div class="small">Öffentliche Zusatzinfos</div>
-                ${input(o.public_info || "", "public_info")}
+                <td>
+                  ${
+                    rowEditableAll
+                      ? input(o.customer_name || "", "customer_name")
+                      : escHtml(o.customer_name || "")
+                  }
+                </td>
 
-                <div class="small">Öffentlicher Status-Text</div>
-                ${input(o.public_status_label || "", "public_status_label")}
-              </td>
+                <td>
+                  ${
+                    rowEditableAll
+                      ? textarea(o.production_summary || summary || "", "production_summary")
+                      : escHtml(summary || "")
+                  }
+                </td>
 
-              <td>
-                <textarea class="input" data-name="internal_notes">${escHtml(o.internal_notes || "")}</textarea>
-              </td>
+                <td>
+                  ${
+                    openEditable || rowEditableAll
+                      ? `<select class="input" data-name="status">${renderStatusOptions(o.status)}</select>`
+                      : escHtml(o.status || "")
+                  }
+                </td>
 
-              <td>
-                <button class="btn saveOrder" type="button">Speichern</button>
-              </td>
-            </tr>
-          `)
+                <td>
+                  ${
+                    openEditable || rowEditableAll
+                      ? `<label class="small"><input data-name="deposit_required" type="checkbox" ${o.deposit_required ? "checked" : ""}> ja</label>`
+                      : o.deposit_required
+                        ? "Ja"
+                        : "Nein"
+                  }
+                </td>
+
+                <td>
+                  ${
+                    rowEditableAll
+                      ? input(o.deposit_amount ?? 0, "deposit_amount", "number")
+                      : euro(o.deposit_amount || 0)
+                  }
+                </td>
+
+                <td>
+                  ${
+                    openEditable || rowEditableAll
+                      ? `<label class="small"><input data-name="deposit_received" type="checkbox" ${o.deposit_received ? "checked" : ""}> erhalten</label>`
+                      : o.deposit_received
+                        ? "Ja"
+                        : "Nein"
+                  }
+                </td>
+
+                <td>
+                  ${
+                    openEditable || rowEditableAll
+                      ? `<select class="input" data-name="assigned_to">${renderProfileOptions(o.assigned_to)}</select>`
+                      : escHtml(
+                          profilesCache.find((p) => p.id === o.assigned_to)?.display_name ||
+                          profilesCache.find((p) => p.id === o.assigned_to)?.email ||
+                          ""
+                        )
+                  }
+                </td>
+
+                <td>
+                  ${
+                    rowEditableAll
+                      ? input(o.invoice_total ?? o.total_price ?? 0, "invoice_total", "number")
+                      : euro(o.invoice_total || o.total_price || 0)
+                  }
+                </td>
+
+                <td>
+                  ${
+                    rowEditableAll
+                      ? input(o.invoice_remaining ?? 0, "invoice_remaining", "number")
+                      : euro(o.invoice_remaining || 0)
+                  }
+                </td>
+
+                <td>
+                  ${
+                    openEditable || rowEditableAll
+                      ? textarea(o.public_info || "", "public_info")
+                      : escHtml(o.public_info || "")
+                  }
+                </td>
+
+                <td>
+                  ${
+                    rowEditableAll
+                      ? input(o.invoice_status || "", "invoice_status")
+                      : escHtml(o.invoice_status || "")
+                  }
+                </td>
+
+                <td>
+                  ${
+                    openEditable || rowEditableAll
+                      ? `<button class="btn saveOrder" type="button" data-mode="${mode}">Speichern</button>`
+                      : ""
+                  }
+                </td>
+              </tr>
+            `;
+          })
           .join("")}
       </tbody>
     </table>
   `;
+}
 
-  document.querySelectorAll(".saveOrder").forEach((btn) => {
-    btn.onclick = saveOrder;
-  });
+async function loadOrdersByMode(mode) {
+  const c = document.getElementById("content");
+  const isFinishedMode = mode === "finished";
+
+  c.innerHTML = isFinishedMode ? "Lade fertige Aufträge…" : "Lade offene Aufträge…";
+  setAdminStatus("");
+
+  if (isFinishedMode && currentUserRole !== "admin") {
+    c.innerHTML = "Fertige Aufträge dürfen nur von Admins geöffnet werden.";
+    return;
+  }
+
+  try {
+    await loadProfiles();
+
+    let query = window.lfcSupabase
+      .from("orders")
+      .select(`
+        id,
+        created_at,
+        order_number,
+        customer_name,
+        customer_contact,
+        production_summary,
+        status,
+        deposit_required,
+        deposit_amount,
+        deposit_received,
+        assigned_to,
+        invoice_total,
+        invoice_remaining,
+        total_price,
+        public_info,
+        public_status_label,
+        invoice_status,
+        internal_notes,
+        order_items (
+          id,
+          title,
+          quantity,
+          unit_price,
+          total_price
+        )
+      `)
+      .order("created_at", { ascending: false });
+
+    if (isFinishedMode) {
+      query = query.in("status", FINISHED_STATUSES);
+    } else {
+      query = query.not("status", "in", `(${FINISHED_STATUSES.join(",")})`);
+    }
+
+    const { data, error } = await query.limit(500);
+
+    if (error) throw error;
+
+    c.innerHTML = buildOrdersTable(data || [], mode);
+
+    document.querySelectorAll(".saveOrder").forEach((btn) => {
+      btn.onclick = saveOrder;
+    });
+  } catch (error) {
+    console.error(error);
+    c.textContent = "Fehler: " + (error.message || String(error));
+  }
 }
 
 async function saveOrder(e) {
   const tr = e.target.closest("tr");
   const id = tr.dataset.id;
+  const mode = e.target.dataset.mode || "open";
+  const isFinishedMode = mode === "finished";
+
   const obj = {};
 
   tr.querySelectorAll("[data-name]").forEach((el) => {
-    obj[el.dataset.name] = el.value;
+    const name = el.dataset.name;
+
+    if (el.type === "checkbox") {
+      obj[name] = el.checked;
+    } else if (
+      [
+        "deposit_amount",
+        "invoice_total",
+        "invoice_remaining"
+      ].includes(name)
+    ) {
+      obj[name] = Number(el.value || 0);
+    } else if (name === "assigned_to") {
+      obj[name] = el.value ? el.value : null;
+    } else if (name === "created_at") {
+      obj[name] = el.value ? new Date(el.value).toISOString() : null;
+    } else {
+      obj[name] = el.value;
+    }
   });
+
+  if (!isFinishedMode && currentUserRole !== "admin") {
+    const allowed = [
+      "deposit_required",
+      "deposit_received",
+      "assigned_to",
+      "status",
+      "public_info"
+    ];
+
+    Object.keys(obj).forEach((key) => {
+      if (!allowed.includes(key)) delete obj[key];
+    });
+  }
 
   const saveButton = e.target;
   saveButton.disabled = true;
   saveButton.textContent = "Speichere…";
+  setAdminStatus("");
 
   try {
-    const { error } = await window.lfcSupabase
+    const { data, error } = await window.lfcSupabase
       .from("orders")
       .update(obj)
-      .eq("id", id);
+      .eq("id", id)
+      .select("id, order_number, status")
+      .maybeSingle();
 
     if (error) throw error;
 
-    setAdminStatus("✅ Auftrag gespeichert.");
+    if (!data) {
+      throw new Error("Auftrag wurde nicht aktualisiert. Prüfe RLS/Rechte.");
+    }
+
+    setAdminStatus("✅ Auftrag gespeichert: " + data.order_number);
+
+    if (
+      currentTab === "openOrders" &&
+      FINISHED_STATUSES.includes(data.status)
+    ) {
+      await loadOrdersByMode("open");
+    }
   } catch (error) {
     console.error(error);
     alert(error.message || String(error));
@@ -542,6 +842,10 @@ async function saveOrder(e) {
     saveButton.textContent = "Speichern";
   }
 }
+
+/* =========================================================
+   KONTAKTANFRAGEN
+   ========================================================= */
 
 async function loadContacts() {
   const c = document.getElementById("content");
@@ -587,9 +891,14 @@ async function loadContacts() {
   `;
 }
 
+/* =========================================================
+   TABS
+   ========================================================= */
+
 async function loadTab() {
   if (currentTab === "vehicles") return loadVehicles();
-  if (currentTab === "orders") return loadOrders();
+  if (currentTab === "openOrders") return loadOrdersByMode("open");
+  if (currentTab === "finishedOrders") return loadOrdersByMode("finished");
   if (currentTab === "contacts") return loadContacts();
 
   return loadVehicles();
@@ -598,6 +907,11 @@ async function loadTab() {
 document.addEventListener("DOMContentLoaded", async () => {
   document.querySelectorAll(".tab").forEach((button) => {
     button.onclick = () => {
+      if (button.dataset.tab === "finishedOrders" && currentUserRole !== "admin") {
+        alert("Fertige Aufträge dürfen nur von Admins geöffnet werden.");
+        return;
+      }
+
       document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
       button.classList.add("active");
       currentTab = button.dataset.tab;
