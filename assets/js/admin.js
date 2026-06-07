@@ -1,6 +1,6 @@
 let currentTab = "vehicles";
 let vehicleGroupsCache = [];
-let profilesCache = [];
+let orderProductsCache = [];
 let currentUserRole = null;
 
 const FINISHED_STATUSES = ["completed", "cancelled", "rejected"];
@@ -225,6 +225,28 @@ function getStatusPayloadFromLabel(label) {
   };
 }
 
+function calcRemaining(invoiceTotal, depositRequired, depositAmount) {
+  const total = Number(invoiceTotal || 0);
+  const deposit = depositRequired ? Number(depositAmount || 0) : 0;
+  return Math.max(0, total - deposit);
+}
+
+function generateOrderNumber() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+
+  return (
+    "LFC-" +
+    d.getFullYear() +
+    pad(d.getMonth() + 1) +
+    pad(d.getDate()) +
+    "-" +
+    pad(d.getHours()) +
+    pad(d.getMinutes()) +
+    pad(d.getSeconds())
+  );
+}
+
 async function loadVehicleGroups() {
   const { data, error } = await window.lfcSupabase
     .from("vehicle_groups")
@@ -237,17 +259,30 @@ async function loadVehicleGroups() {
   vehicleGroupsCache = data || [];
 }
 
-async function loadProfiles() {
+async function loadOrderProducts() {
   const { data, error } = await window.lfcSupabase
-    .from("profiles")
-    .select("id,email,display_name,role,is_active")
-    .eq("is_active", true)
-    .in("role", ["employee", "manager", "admin"])
+    .from("vehicle_catalog_entries")
+    .select("id,craft_key,display_name,price,is_visible,group_id")
     .order("display_name", { ascending: true });
 
   if (error) throw error;
 
-  profilesCache = data || [];
+  orderProductsCache = (data || []).filter((x) => x.group_id);
+}
+
+async function loadDefaultDepositPercent() {
+  const { data, error } = await window.lfcSupabase
+    .from("app_settings")
+    .select("setting_value")
+    .eq("setting_key", "default_deposit_percent")
+    .maybeSingle();
+
+  if (error || !data) return 15;
+
+  const raw = data.setting_value;
+  const n = Number(raw);
+
+  return Number.isFinite(n) ? n : 15;
 }
 
 async function requireLogin() {
@@ -425,9 +460,9 @@ async function loadVehicles() {
       btn.onclick = updateImagePreviewForRow;
     });
 
-    document.querySelectorAll(".imageUrls").forEach((textarea) => {
-      textarea.addEventListener("input", () => {
-        const tr = textarea.closest("tr");
+    document.querySelectorAll(".imageUrls").forEach((textareaEl) => {
+      textareaEl.addEventListener("input", () => {
+        const tr = textareaEl.closest("tr");
         updateImagePreview(tr);
       });
     });
@@ -552,6 +587,189 @@ async function saveVehicle(e) {
 }
 
 /* =========================================================
+   NEUER AUFTRAG
+========================================================= */
+
+async function loadNewOrder() {
+  const c = document.getElementById("content");
+  c.innerHTML = "Lade Formular…";
+  setAdminStatus("");
+
+  try {
+    await loadOrderProducts();
+
+    const productOptions = orderProductsCache
+      .map((p) => {
+        const label = `${p.display_name} (${p.craft_key})`;
+        return `<option value="${escHtml(label)}"></option>`;
+      })
+      .join("");
+
+    c.innerHTML = `
+      <section class="bt-card order-create-card">
+        <h2>Neuen Auftrag erstellen</h2>
+
+        <form id="newOrderForm" class="shop-form">
+          <div class="order-create-grid">
+            <div class="shop-field">
+              <label for="newOrderCustomerName">Kundenname *</label>
+              <input class="input" id="newOrderCustomerName" type="text" required placeholder="Kundenname">
+            </div>
+
+            <div class="shop-field">
+              <label for="newOrderProductSearch">Was wird hergestellt? *</label>
+              <input class="input" id="newOrderProductSearch" list="orderProductList" required placeholder="Fahrzeug suchen…">
+              <datalist id="orderProductList">
+                ${productOptions}
+              </datalist>
+              <div class="small" id="newOrderProductInfo">Bitte Fahrzeug auswählen.</div>
+            </div>
+          </div>
+
+          <div class="shop-field">
+            <label for="newOrderPublicInfo">Zusätzliche Infos</label>
+            <textarea class="input" id="newOrderPublicInfo" placeholder="Zusätzliche Infos für die öffentliche Bestellübersicht"></textarea>
+          </div>
+
+          <div class="bt-hint" id="newOrderSummary">Noch kein Fahrzeug ausgewählt.</div>
+
+          <div class="shop-form-actions">
+            <button class="btn" id="newOrderSubmit" type="submit">Auftrag erstellen</button>
+          </div>
+        </form>
+      </section>
+    `;
+
+    const productInput = document.getElementById("newOrderProductSearch");
+    productInput.addEventListener("input", updateNewOrderSummary);
+
+    document.getElementById("newOrderForm").addEventListener("submit", submitNewOrder);
+  } catch (error) {
+    console.error(error);
+    c.textContent = "Fehler: " + (error.message || String(error));
+  }
+}
+
+function findSelectedOrderProduct() {
+  const value = String(document.getElementById("newOrderProductSearch")?.value || "").trim();
+
+  if (!value) return null;
+
+  return orderProductsCache.find((p) => {
+    const label = `${p.display_name} (${p.craft_key})`;
+    return label === value || p.display_name === value || p.craft_key === value;
+  }) || null;
+}
+
+async function updateNewOrderSummary() {
+  const product = findSelectedOrderProduct();
+  const info = document.getElementById("newOrderProductInfo");
+  const summary = document.getElementById("newOrderSummary");
+
+  if (!product) {
+    info.textContent = "Kein gültiges Fahrzeug ausgewählt.";
+    summary.textContent = "Noch kein Fahrzeug ausgewählt.";
+    return;
+  }
+
+  const depositPercent = await loadDefaultDepositPercent();
+  const total = Number(product.price || 0);
+  const deposit = Math.round(total * (depositPercent / 100));
+  const remaining = calcRemaining(total, deposit > 0, deposit);
+
+  info.textContent = `Ausgewählt: ${product.display_name}`;
+  summary.innerHTML =
+    `<strong>${escHtml(product.display_name)}</strong><br>` +
+    `Gesamtbetrag: <strong>${escHtml(euro(total))}</strong><br>` +
+    `Anzahlung (${depositPercent}%): <strong>${escHtml(euro(deposit))}</strong><br>` +
+    `Restbetrag: <strong>${escHtml(euro(remaining))}</strong>`;
+}
+
+async function submitNewOrder(e) {
+  e.preventDefault();
+
+  const customerName = document.getElementById("newOrderCustomerName").value.trim();
+  const publicInfo = document.getElementById("newOrderPublicInfo").value.trim();
+  const product = findSelectedOrderProduct();
+
+  if (!customerName) {
+    alert("Bitte Kundenname eintragen.");
+    return;
+  }
+
+  if (!product) {
+    alert("Bitte ein gültiges Fahrzeug aus der Suche auswählen.");
+    return;
+  }
+
+  const submitButton = document.getElementById("newOrderSubmit");
+  submitButton.disabled = true;
+  submitButton.textContent = "Erstelle…";
+  setAdminStatus("");
+
+  try {
+    const depositPercent = await loadDefaultDepositPercent();
+    const total = Number(product.price || 0);
+    const deposit = Math.round(total * (depositPercent / 100));
+    const depositRequired = deposit > 0;
+    const remaining = calcRemaining(total, depositRequired, deposit);
+    const orderNumber = generateOrderNumber();
+
+    const { data: order, error: orderError } = await window.lfcSupabase
+      .from("orders")
+      .insert({
+        order_number: orderNumber,
+        customer_name: customerName,
+        production_summary: product.display_name,
+        status: "new",
+        public_status_label: "Bestellung ist eingegangen",
+        public_info: publicInfo,
+        total_price: total,
+        invoice_total: total,
+        deposit_required: depositRequired,
+        deposit_amount: deposit,
+        invoice_remaining: remaining,
+        invoice_paid: false,
+        source: "admin"
+      })
+      .select("id, order_number")
+      .single();
+
+    if (orderError) throw orderError;
+
+    const { error: itemError } = await window.lfcSupabase
+      .from("order_items")
+      .insert({
+        order_id: order.id,
+        item_type: "vehicle",
+        vehicle_catalog_entry_id: product.id,
+        title: product.display_name,
+        quantity: 1,
+        unit_price: total,
+        total_price: total
+      });
+
+    if (itemError) throw itemError;
+
+    setAdminStatus("✅ Auftrag erstellt: " + order.order_number);
+
+    currentTab = "openOrders";
+    document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
+    const openTab = document.querySelector('.tab[data-tab="openOrders"]');
+    if (openTab) openTab.classList.add("active");
+
+    await loadOrdersByMode("open");
+  } catch (error) {
+    console.error(error);
+    alert(error.message || String(error));
+    setAdminStatus("❌ Auftrag konnte nicht erstellt werden.");
+  } finally {
+    submitButton.disabled = false;
+    submitButton.textContent = "Auftrag erstellen";
+  }
+}
+
+/* =========================================================
    AUFTRÄGE
 ========================================================= */
 
@@ -586,7 +804,6 @@ function buildOrdersTable(data, mode) {
           <th>Status</th>
           <th>Anzahlung</th>
           <th>Anzahlungs-Betrag</th>
-          <th>Anzahlung erhalten?</th>
           <th>Wer ist zuständig?</th>
           <th>Gesamtbetrag Rechnung</th>
           <th>Restbetrag Rechnung</th>
@@ -602,6 +819,12 @@ function buildOrdersTable(data, mode) {
             const summary = orderItemsSummary(o);
             const rowEditableAll = canEditAll;
             const openEditable = !isFinishedMode;
+
+            const calculatedRemaining = calcRemaining(
+              o.invoice_total || o.total_price || 0,
+              o.deposit_required,
+              o.deposit_amount || 0
+            );
 
             return `
               <tr data-id="${escHtml(o.id)}">
@@ -666,16 +889,6 @@ function buildOrdersTable(data, mode) {
                 <td>
                   ${
                     openEditable || rowEditableAll
-                      ? `<label class="small"><input data-name="deposit_received" type="checkbox" ${o.deposit_received ? "checked" : ""}> erhalten</label>`
-                      : o.deposit_received
-                        ? "Ja"
-                        : "Nein"
-                  }
-                </td>
-
-                <td>
-                  ${
-                    openEditable || rowEditableAll
                       ? input(o.responsible_text || "", "responsible_text")
                       : escHtml(o.responsible_text || "")
                   }
@@ -690,11 +903,7 @@ function buildOrdersTable(data, mode) {
                 </td>
 
                 <td>
-                  ${
-                    rowEditableAll
-                      ? input(o.invoice_remaining ?? 0, "invoice_remaining", "number")
-                      : euro(o.invoice_remaining || 0)
-                  }
+                  ${escHtml(euro(calculatedRemaining))}
                 </td>
 
                 <td>
@@ -744,8 +953,6 @@ async function loadOrdersByMode(mode) {
   }
 
   try {
-    await loadProfiles();
-
     let query = window.lfcSupabase
       .from("orders")
       .select(`
@@ -759,8 +966,6 @@ async function loadOrdersByMode(mode) {
         public_status_label,
         deposit_required,
         deposit_amount,
-        deposit_received,
-        assigned_to,
         responsible_text,
         invoice_total,
         invoice_remaining,
@@ -820,16 +1025,8 @@ async function saveOrder(e) {
 
     if (el.type === "checkbox") {
       obj[name] = el.checked;
-    } else if (
-      [
-        "deposit_amount",
-        "invoice_total",
-        "invoice_remaining"
-      ].includes(name)
-    ) {
+    } else if (["deposit_amount", "invoice_total"].includes(name)) {
       obj[name] = Number(el.value || 0);
-    } else if (name === "assigned_to") {
-      obj[name] = el.value ? el.value : null;
     } else if (name === "created_at") {
       obj[name] = el.value ? new Date(el.value).toISOString() : null;
     } else {
@@ -840,9 +1037,7 @@ async function saveOrder(e) {
   if (!isFinishedMode && currentUserRole !== "admin") {
     const allowed = [
       "deposit_required",
-      "deposit_received",
       "responsible_text",
-      "assigned_to",
       "status",
       "public_status_label",
       "public_info",
@@ -943,6 +1138,7 @@ async function loadContacts() {
 
 async function loadTab() {
   if (currentTab === "vehicles") return loadVehicles();
+  if (currentTab === "newOrder") return loadNewOrder();
   if (currentTab === "openOrders") return loadOrdersByMode("open");
   if (currentTab === "finishedOrders") return loadOrdersByMode("finished");
   if (currentTab === "contacts") return loadContacts();
