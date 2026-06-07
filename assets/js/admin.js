@@ -82,6 +82,7 @@ function formatDateInput(value) {
   try {
     const d = new Date(value);
     const pad = (n) => String(n).padStart(2, "0");
+
     return (
       d.getFullYear() +
       "-" +
@@ -177,28 +178,10 @@ function renderGroupOptions(selectedGroupId) {
     ${vehicleGroupsCache
       .map((g) => {
         const id = String(g.id);
+
         return `
           <option value="${escHtml(id)}" ${id === selected ? "selected" : ""}>
             ${escHtml(g.name)}
-          </option>
-        `;
-      })
-      .join("")}
-  `;
-}
-
-function renderProfileOptions(selectedUserId) {
-  const selected = selectedUserId ? String(selectedUserId) : "";
-
-  return `
-    <option value="">Nicht zugewiesen</option>
-    ${profilesCache
-      .map((p) => {
-        const id = String(p.id);
-        const label = p.display_name || p.email || id;
-        return `
-          <option value="${escHtml(id)}" ${id === selected ? "selected" : ""}>
-            ${escHtml(label)}
           </option>
         `;
       })
@@ -462,12 +445,12 @@ function updateImagePreviewForRow(e) {
 function updateImagePreview(tr) {
   if (!tr) return;
 
-  const textarea = tr.querySelector(".imageUrls");
+  const textareaEl = tr.querySelector(".imageUrls");
   const preview = tr.querySelector(".imagePreview");
 
-  if (!textarea || !preview) return;
+  if (!textareaEl || !preview) return;
 
-  preview.innerHTML = renderImagePreview(textarea.value);
+  preview.innerHTML = renderImagePreview(textareaEl.value);
 }
 
 async function saveVehicle(e) {
@@ -608,10 +591,11 @@ function buildOrdersTable(data, mode) {
           <th>Gesamtbetrag Rechnung</th>
           <th>Restbetrag Rechnung</th>
           <th>Zusätzliche Infos</th>
-          <th>Rechnungsstatus</th>
+          <th>Rechnung bezahlt?</th>
           <th>Aktion</th>
         </tr>
       </thead>
+
       <tbody>
         ${(data || [])
           .map((o) => {
@@ -723,9 +707,11 @@ function buildOrdersTable(data, mode) {
 
                 <td>
                   ${
-                    rowEditableAll
-                      ? input(o.invoice_status || "", "invoice_status")
-                      : escHtml(o.invoice_status || "")
+                    openEditable || rowEditableAll
+                      ? `<label class="small"><input data-name="invoice_paid" type="checkbox" ${o.invoice_paid ? "checked" : ""}> bezahlt</label>`
+                      : o.invoice_paid
+                        ? "Ja"
+                        : "Nein"
                   }
                 </td>
 
@@ -778,6 +764,7 @@ async function loadOrdersByMode(mode) {
         responsible_text,
         invoice_total,
         invoice_remaining,
+        invoice_paid,
         total_price,
         public_info,
         invoice_status,
@@ -858,7 +845,8 @@ async function saveOrder(e) {
       "assigned_to",
       "status",
       "public_status_label",
-      "public_info"
+      "public_info",
+      "invoice_paid"
     ];
 
     Object.keys(obj).forEach((key) => {
@@ -876,7 +864,7 @@ async function saveOrder(e) {
       .from("orders")
       .update(obj)
       .eq("id", id)
-      .select("id, order_number, status, public_status_label")
+      .select("id, order_number, status, public_status_label, invoice_paid")
       .maybeSingle();
 
     if (error) throw error;
@@ -931,6 +919,7 @@ async function loadContacts() {
           <th>Status</th>
         </tr>
       </thead>
+
       <tbody>
         ${(data || [])
           .map((r) => `
