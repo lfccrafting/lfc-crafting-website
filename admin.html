@@ -44,18 +44,18 @@
       background:transparent;
       color:inherit;
       cursor:pointer;
-      transition: border-color .15s ease, color .15s ease, transform .15s ease;
+      transition:border-color .15s ease,color .15s ease,transform .15s ease;
     }
 
     .tab:hover{
       border-color:rgba(255,153,0,.55);
-      color:var(--accent-2, #ffb347);
+      color:var(--accent-2,#ffb347);
       transform:translateY(-1px);
     }
 
     .tab.active{
       border-color:rgba(255,153,0,.75);
-      color:var(--accent-2, #ffb347);
+      color:var(--accent-2,#ffb347);
       box-shadow:0 0 0 1px rgba(255,153,0,.12);
     }
 
@@ -142,12 +142,12 @@
       color:inherit;
       cursor:pointer;
       margin:2px 0;
-      transition: border-color .15s ease, color .15s ease, transform .15s ease;
+      transition:border-color .15s ease,color .15s ease,transform .15s ease;
     }
 
     .btn:hover:not(:disabled){
       border-color:rgba(255,153,0,.55);
-      color:var(--accent-2, #ffb347);
+      color:var(--accent-2,#ffb347);
       transform:translateY(-1px);
     }
 
@@ -238,14 +238,16 @@
       font-size:12px;
     }
 
-    .order-create-card{
-      max-width:900px;
+    .order-create-card,
+    .settings-card{
+      max-width:1000px;
       margin:0 auto;
       display:grid;
       gap:12px;
     }
 
-    .order-create-grid{
+    .order-create-grid,
+    .settings-grid{
       display:grid;
       grid-template-columns:1fr 1fr;
       gap:12px;
@@ -269,7 +271,8 @@
     }
 
     @media(max-width:800px){
-      .order-create-grid{
+      .order-create-grid,
+      .settings-grid{
         grid-template-columns:1fr;
       }
     }
@@ -299,6 +302,8 @@
         <button class="tab" data-tab="openOrders" data-min-role="employee">Offene Aufträge</button>
         <button class="tab" data-tab="finishedOrders" data-min-role="manager">Fertige Aufträge</button>
         <button class="tab" data-tab="contacts" data-min-role="employee">Anfragen</button>
+        <button class="tab" data-tab="appointments" data-min-role="employee">Termine</button>
+        <button class="tab" data-tab="settings" data-min-role="manager">Einstellungen</button>
       </div>
 
       <div id="adminStatus" class="status-line small" aria-live="polite"></div>
