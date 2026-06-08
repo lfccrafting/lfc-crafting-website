@@ -6,37 +6,15 @@ let currentUserRole = null;
 const FINISHED_STATUSES = ["completed", "cancelled", "rejected"];
 
 const ORDER_STATUS_OPTIONS = [
-  {
-    label: "Bestellung ist eingegangen",
-    status: "new",
-    publicLabel: "Bestellung ist eingegangen"
-  },
-  {
-    label: "Warte auf Anzahlung",
-    status: "waiting_for_customer",
-    publicLabel: "Warte auf Anzahlung"
-  },
-  {
-    label: "In Warteschlange",
-    status: "accepted",
-    publicLabel: "In Warteschlange"
-  },
-  {
-    label: "In Produktion",
-    status: "in_progress",
-    publicLabel: "In Produktion"
-  },
-  {
-    label: "Abholbereit",
-    status: "ready",
-    publicLabel: "Abholbereit"
-  },
-  {
-    label: "Storniert",
-    status: "cancelled",
-    publicLabel: "Storniert"
-  }
+  { label: "Bestellung ist eingegangen", status: "new", publicLabel: "Bestellung ist eingegangen" },
+  { label: "Warte auf Anzahlung", status: "waiting_for_customer", publicLabel: "Warte auf Anzahlung" },
+  { label: "In Warteschlange", status: "accepted", publicLabel: "In Warteschlange" },
+  { label: "In Produktion", status: "in_progress", publicLabel: "In Produktion" },
+  { label: "Abholbereit", status: "ready", publicLabel: "Abholbereit" },
+  { label: "Storniert", status: "cancelled", publicLabel: "Storniert" }
 ];
+
+const ROLE_OPTIONS = ["employee", "manager", "admin"];
 
 function escHtml(str) {
   return String(str ?? "").replace(/[&<>"']/g, function (m) {
@@ -72,8 +50,7 @@ function canAccessRole(minRole) {
 function applyTabVisibility() {
   document.querySelectorAll(".tab").forEach((tab) => {
     const minRole = tab.dataset.minRole || "employee";
-    const allowed = canAccessRole(minRole);
-    tab.style.display = allowed ? "" : "none";
+    tab.style.display = canAccessRole(minRole) ? "" : "none";
   });
 
   const activeTab = document.querySelector(".tab.active");
@@ -94,20 +71,15 @@ function applyTabVisibility() {
 function setAdminStatus(message, type = "") {
   const el = document.getElementById("adminStatus");
   if (!el) return;
-
   el.textContent = message || "";
   el.className = "status-line small";
-
   if (type) el.classList.add(type);
 }
 
 function formatDate(value) {
   if (!value) return "";
-  try {
-    return new Date(value).toLocaleString("de-DE");
-  } catch {
-    return String(value);
-  }
+  try { return new Date(value).toLocaleString("de-DE"); }
+  catch { return String(value); }
 }
 
 function formatDateInput(value) {
@@ -115,18 +87,7 @@ function formatDateInput(value) {
   try {
     const d = new Date(value);
     const pad = (n) => String(n).padStart(2, "0");
-
-    return (
-      d.getFullYear() +
-      "-" +
-      pad(d.getMonth() + 1) +
-      "-" +
-      pad(d.getDate()) +
-      "T" +
-      pad(d.getHours()) +
-      ":" +
-      pad(d.getMinutes())
-    );
+    return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + "T" + pad(d.getHours()) + ":" + pad(d.getMinutes());
   } catch {
     return "";
   }
@@ -184,19 +145,12 @@ function renderImagePreview(imageText) {
 
   return `
     <div class="img-preview">
-      ${urls
-        .slice(0, 10)
-        .map((url, index) => {
-          const previewUrl = normalizePreviewImageUrl(url);
-
-          return `
-            <div class="img-preview-item" title="${escHtml(url)}">
-              <span>${index + 1}${index === 0 ? " ★" : ""}</span>
-              <img src="${escHtml(previewUrl)}" alt="" loading="lazy" onerror="this.style.opacity='.25'">
-            </div>
-          `;
-        })
-        .join("")}
+      ${urls.slice(0, 10).map((url, index) => `
+        <div class="img-preview-item" title="${escHtml(url)}">
+          <span>${index + 1}${index === 0 ? " ★" : ""}</span>
+          <img src="${escHtml(normalizePreviewImageUrl(url))}" alt="" loading="lazy" onerror="this.style.opacity='.25'">
+        </div>
+      `).join("")}
     </div>
   `;
 }
@@ -206,25 +160,15 @@ function renderGroupOptions(selectedGroupId) {
 
   return `
     <option value="">Ohne Gruppe</option>
-    ${vehicleGroupsCache
-      .map((g) => {
-        const id = String(g.id);
-
-        return `
-          <option value="${escHtml(id)}" ${id === selected ? "selected" : ""}>
-            ${escHtml(g.name)}
-          </option>
-        `;
-      })
-      .join("")}
+    ${vehicleGroupsCache.map((g) => {
+      const id = String(g.id);
+      return `<option value="${escHtml(id)}" ${id === selected ? "selected" : ""}>${escHtml(g.name)}</option>`;
+    }).join("")}
   `;
 }
 
 function optionKey(status, publicLabel) {
-  const found = ORDER_STATUS_OPTIONS.find((x) => {
-    return x.status === status && x.publicLabel === publicLabel;
-  });
-
+  const found = ORDER_STATUS_OPTIONS.find((x) => x.status === status && x.publicLabel === publicLabel);
   if (found) return found.label;
 
   const fallback = ORDER_STATUS_OPTIONS.find((x) => x.status === status);
@@ -234,21 +178,15 @@ function optionKey(status, publicLabel) {
 function renderStatusOptions(status, publicLabel) {
   const selectedKey = optionKey(status, publicLabel);
 
-  return ORDER_STATUS_OPTIONS
-    .map((x) => {
-      return `
-        <option value="${escHtml(x.label)}" ${selectedKey === x.label ? "selected" : ""}>
-          ${escHtml(x.label)}
-        </option>
-      `;
-    })
-    .join("");
+  return ORDER_STATUS_OPTIONS.map((x) => `
+    <option value="${escHtml(x.label)}" ${selectedKey === x.label ? "selected" : ""}>
+      ${escHtml(x.label)}
+    </option>
+  `).join("");
 }
 
 function getStatusPayloadFromLabel(label) {
-  const found =
-    ORDER_STATUS_OPTIONS.find((x) => x.label === label) ||
-    ORDER_STATUS_OPTIONS[0];
+  const found = ORDER_STATUS_OPTIONS.find((x) => x.label === label) || ORDER_STATUS_OPTIONS[0];
 
   return {
     status: found.status,
@@ -272,21 +210,11 @@ function recalcOrderRowRemaining(tr) {
 
   if (!remainingEl) return;
 
-  const invoiceTotal = invoiceTotalEl
-    ? Number(invoiceTotalEl.value || 0)
-    : Number(tr.dataset.invoiceTotal || 0);
+  const invoiceTotal = invoiceTotalEl ? Number(invoiceTotalEl.value || 0) : Number(tr.dataset.invoiceTotal || 0);
+  const depositRequired = depositRequiredEl ? depositRequiredEl.checked : String(tr.dataset.depositRequired || "false") === "true";
+  const depositAmount = depositAmountEl ? Number(depositAmountEl.value || 0) : Number(tr.dataset.depositAmount || 0);
 
-  const depositRequired = depositRequiredEl
-    ? depositRequiredEl.checked
-    : String(tr.dataset.depositRequired || "false") === "true";
-
-  const depositAmount = depositAmountEl
-    ? Number(depositAmountEl.value || 0)
-    : Number(tr.dataset.depositAmount || 0);
-
-  const remaining = calcRemaining(invoiceTotal, depositRequired, depositAmount);
-
-  remainingEl.textContent = euro(remaining);
+  remainingEl.textContent = euro(calcRemaining(invoiceTotal, depositRequired, depositAmount));
 }
 
 function bindOrderCalculationEvents() {
@@ -294,7 +222,6 @@ function bindOrderCalculationEvents() {
     ["invoice_total", "deposit_amount", "deposit_required"].forEach((name) => {
       const el = tr.querySelector(`[data-name="${name}"]`);
       if (!el) return;
-
       el.addEventListener("input", () => recalcOrderRowRemaining(tr));
       el.addEventListener("change", () => recalcOrderRowRemaining(tr));
     });
@@ -306,17 +233,7 @@ function bindOrderCalculationEvents() {
 function generateOrderNumber() {
   const d = new Date();
   const pad = (n) => String(n).padStart(2, "0");
-
-  return (
-    "LFC-" +
-    d.getFullYear() +
-    pad(d.getMonth() + 1) +
-    pad(d.getDate()) +
-    "-" +
-    pad(d.getHours()) +
-    pad(d.getMinutes()) +
-    pad(d.getSeconds())
-  );
+  return "LFC-" + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + "-" + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
 }
 
 async function loadVehicleGroups() {
@@ -327,7 +244,6 @@ async function loadVehicleGroups() {
     .order("name", { ascending: true });
 
   if (error) throw error;
-
   vehicleGroupsCache = data || [];
 }
 
@@ -353,7 +269,6 @@ async function loadDefaultDepositPercent() {
 
   const raw = data.setting_value;
   const n = Number(raw);
-
   return Number.isFinite(n) ? n : 15;
 }
 
@@ -361,8 +276,7 @@ async function requireLogin() {
   const { data, error } = await window.lfcSupabase.auth.getUser();
 
   if (error || !data.user) {
-    document.getElementById("authStatus").innerHTML =
-      'Nicht eingeloggt. <a href="login.html">Zum Login</a>';
+    document.getElementById("authStatus").innerHTML = 'Nicht eingeloggt. <a href="login.html">Zum Login</a>';
     return false;
   }
 
@@ -373,18 +287,13 @@ async function requireLogin() {
     .maybeSingle();
 
   if (!profile || !profile.is_active || !["employee", "manager", "admin"].includes(profile.role)) {
-    document.getElementById("authStatus").innerHTML =
-      "Eingeloggt, aber kein Zugriff auf die Verwaltung.";
+    document.getElementById("authStatus").innerHTML = "Eingeloggt, aber kein Zugriff auf die Verwaltung.";
     return false;
   }
 
   currentUserRole = profile.role;
-
-  document.getElementById("authStatus").textContent =
-    `✅ Eingeloggt als ${data.user.email} (${profile.role})`;
-
+  document.getElementById("authStatus").textContent = `✅ Eingeloggt als ${data.user.email} (${profile.role})`;
   applyTabVisibility();
-
   return true;
 }
 
@@ -439,99 +348,68 @@ async function loadVehicles() {
           </tr>
         </thead>
         <tbody>
-          ${(data || [])
-            .map((v) => {
-              const imageText = imagesToTextarea(v.vehicle_images || []);
+          ${(data || []).map((v) => {
+            const imageText = imagesToTextarea(v.vehicle_images || "");
 
-              return `
-                <tr data-id="${escHtml(v.id)}">
-                  <td>
-                    <div class="small">${escHtml(v.craft_key)}</div>
+            return `
+              <tr data-id="${escHtml(v.id)}">
+                <td>
+                  <div class="small">${escHtml(v.craft_key)}</div>
+                  <div class="small">Anzeigename / Katalogtitel</div>
+                  ${input(v.display_name || "", "display_name")}
+                  <div class="small">Dieser Anzeigename wird im öffentlichen Katalog als <strong>shop-card-title</strong> verwendet.</div>
+                  <div class="small">Bauplan</div>
+                  ${input(v.blueprint_name || "", "blueprint_name")}
+                </td>
 
-                    <div class="small">Anzeigename / Katalogtitel</div>
-                    ${input(v.display_name || "", "display_name")}
+                <td>
+                  <div class="small">Gruppe</div>
+                  <select class="input" data-name="group_id">${renderGroupOptions(v.group_id)}</select>
+                  <div class="small">Fahrzeuge ohne Gruppe werden im öffentlichen Katalog nicht angezeigt.</div>
+                </td>
 
-                    <div class="small">
-                      Dieser Anzeigename wird im öffentlichen Katalog als <strong>shop-card-title</strong> verwendet.
-                    </div>
+                <td>
+                  <div class="small">Preis</div>
+                  ${input(v.price ?? 0, "price", "number")}
+                  <div class="small">Sortierung</div>
+                  ${input(v.sort_order ?? 1000, "sort_order", "number")}
+                </td>
 
-                    <div class="small">Bauplan</div>
-                    ${input(v.blueprint_name || "", "blueprint_name")}
-                  </td>
+                <td>
+                  <label class="small">
+                    <input data-name="is_visible" type="checkbox" ${v.is_visible ? "checked" : ""}>
+                    sichtbar
+                  </label>
+                </td>
 
-                  <td>
-                    <div class="small">Gruppe</div>
-                    <select class="input" data-name="group_id">
-                      ${renderGroupOptions(v.group_id)}
-                    </select>
-                    <div class="small">
-                      Fahrzeuge ohne Gruppe werden im öffentlichen Katalog nicht angezeigt.
-                    </div>
-                  </td>
+                <td>${textarea(v.description || "", "description")}</td>
+                <td>${input(v.trunk_size || "", "trunk_size")}</td>
 
-                  <td>
-                    <div class="small">Preis</div>
-                    ${input(v.price ?? 0, "price", "number")}
+                <td class="img-editor">
+                  <div class="small">Bild-URLs, eine URL pro Zeile.<br>Nur https:// Links sind gültig.<br>Erstes Bild = Hauptbild.</div>
+                  <textarea class="input imageUrls" data-name="_image_urls">${escHtml(imageText)}</textarea>
+                  <div class="imagePreview">${renderImagePreview(imageText)}</div>
+                </td>
 
-                    <div class="small">Sortierung</div>
-                    ${input(v.sort_order ?? 1000, "sort_order", "number")}
-                  </td>
-
-                  <td>
-                    <label class="small">
-                      <input data-name="is_visible" type="checkbox" ${v.is_visible ? "checked" : ""}>
-                      sichtbar
-                    </label>
-                  </td>
-
-                  <td>
-                    ${textarea(v.description || "", "description")}
-                  </td>
-
-                  <td>
-                    ${input(v.trunk_size || "", "trunk_size")}
-                  </td>
-
-                  <td class="img-editor">
-                    <div class="small">
-                      Bild-URLs, eine URL pro Zeile.<br>
-                      Nur https:// Links sind gültig.<br>
-                      Erstes Bild = Hauptbild.
-                    </div>
-
-                    <textarea class="input imageUrls" data-name="_image_urls">${escHtml(imageText)}</textarea>
-
-                    <div class="imagePreview">
-                      ${renderImagePreview(imageText)}
-                    </div>
-                  </td>
-
-                  <td>
-                    <div class="admin-row-actions">
-                      <button class="btn previewImages" type="button">Vorschau</button>
-                      <button class="btn saveVehicle" type="button">Speichern</button>
-                    </div>
-                  </td>
-                </tr>
-              `;
-            })
-            .join("")}
+                <td>
+                  <div class="admin-row-actions">
+                    <button class="btn previewImages" type="button">Vorschau</button>
+                    <button class="btn saveVehicle" type="button">Speichern</button>
+                  </div>
+                </td>
+              </tr>
+            `;
+          }).join("")}
         </tbody>
       </table>
     `;
 
-    document.querySelectorAll(".saveVehicle").forEach((btn) => {
-      btn.onclick = saveVehicle;
-    });
-
-    document.querySelectorAll(".previewImages").forEach((btn) => {
-      btn.onclick = updateImagePreviewForRow;
-    });
+    document.querySelectorAll(".saveVehicle").forEach((btn) => btn.onclick = saveVehicle);
+    document.querySelectorAll(".previewImages").forEach((btn) => btn.onclick = updateImagePreviewForRow);
 
     document.querySelectorAll(".imageUrls").forEach((textareaEl) => {
       textareaEl.addEventListener("input", () => {
-        const tr = textareaEl.closest("tr");
-        updateImagePreview(tr);
+        updateImagePreview(textareaEl.closest("tr"));
       });
     });
   } catch (error) {
@@ -541,8 +419,7 @@ async function loadVehicles() {
 }
 
 function updateImagePreviewForRow(e) {
-  const tr = e.target.closest("tr");
-  updateImagePreview(tr);
+  updateImagePreview(e.target.closest("tr"));
 }
 
 function updateImagePreview(tr) {
@@ -559,25 +436,17 @@ function updateImagePreview(tr) {
 async function saveVehicle(e) {
   const tr = e.target.closest("tr");
   const id = tr.dataset.id;
-
   const vehicleUpdate = {};
 
   tr.querySelectorAll("[data-name]").forEach((el) => {
     const name = el.dataset.name;
-
     if (name === "_image_urls") return;
 
-    if (el.type === "checkbox") {
-      vehicleUpdate[name] = el.checked;
-    } else if (name === "price") {
-      vehicleUpdate[name] = Number(el.value || 0);
-    } else if (name === "sort_order") {
-      vehicleUpdate[name] = Number(el.value || 1000);
-    } else if (name === "group_id") {
-      vehicleUpdate[name] = el.value ? el.value : null;
-    } else {
-      vehicleUpdate[name] = el.value;
-    }
+    if (el.type === "checkbox") vehicleUpdate[name] = el.checked;
+    else if (name === "price") vehicleUpdate[name] = Number(el.value || 0);
+    else if (name === "sort_order") vehicleUpdate[name] = Number(el.value || 1000);
+    else if (name === "group_id") vehicleUpdate[name] = el.value ? el.value : null;
+    else vehicleUpdate[name] = el.value;
   });
 
   const imageTextarea = tr.querySelector('[data-name="_image_urls"]');
@@ -589,17 +458,13 @@ async function saveVehicle(e) {
   const invalidImageLines = rawImageLines.filter((url) => !/^https:\/\//i.test(url));
 
   if (invalidImageLines.length) {
-    alert(
-      "Es sind ungültige Bildlinks vorhanden.\n\n" +
-      "Erlaubt sind nur Links, die mit https:// beginnen.\n\n" +
-      invalidImageLines.join("\n")
-    );
+    alert("Es sind ungültige Bildlinks vorhanden.\n\nErlaubt sind nur Links, die mit https:// beginnen.\n\n" + invalidImageLines.join("\n"));
     return;
   }
 
   const imageUrls = parseImageTextarea(imageTextarea ? imageTextarea.value : "");
-
   const saveButton = e.target;
+
   saveButton.disabled = true;
   saveButton.textContent = "Speichere…";
   setAdminStatus("");
@@ -615,9 +480,7 @@ async function saveVehicle(e) {
     if (vehicleError) throw vehicleError;
 
     if (!updatedRows) {
-      throw new Error(
-        "Fahrzeug wurde nicht aktualisiert. Wahrscheinlich blockiert RLS die Änderung oder die ID wurde nicht gefunden."
-      );
+      throw new Error("Fahrzeug wurde nicht aktualisiert. Wahrscheinlich blockiert RLS die Änderung oder die ID wurde nicht gefunden.");
     }
 
     const { error: deleteImagesError } = await window.lfcSupabase
@@ -686,11 +549,9 @@ async function loadNewOrder() {
 
             <div class="shop-field">
               <label for="newOrderProductSearch">Was wird hergestellt? *</label>
-              <input class="input" id="newOrderProductSearch" list="orderProductList" required placeholder="Fahrzeug suchen…">
-              <datalist id="orderProductList">
-                ${productOptions}
-              </datalist>
-              <div class="small" id="newOrderProductInfo">Bitte Fahrzeug auswählen.</div>
+              <input class="input" id="newOrderProductSearch" list="orderProductList" required placeholder="Fahrzeug oder Upgrade suchen…">
+              <datalist id="orderProductList">${productOptions}</datalist>
+              <div class="small" id="newOrderProductInfo">Bitte Fahrzeug oder Upgrade auswählen.</div>
             </div>
           </div>
 
@@ -708,9 +569,7 @@ async function loadNewOrder() {
       </section>
     `;
 
-    const productInput = document.getElementById("newOrderProductSearch");
-    productInput.addEventListener("input", updateNewOrderSummary);
-
+    document.getElementById("newOrderProductSearch").addEventListener("input", updateNewOrderSummary);
     document.getElementById("newOrderForm").addEventListener("submit", submitNewOrder);
   } catch (error) {
     console.error(error);
@@ -743,14 +602,16 @@ async function updateNewOrderSummary() {
   const depositPercent = await loadDefaultDepositPercent();
   const total = Number(product.price || 0);
   const deposit = Math.round(total * (depositPercent / 100));
-  const remaining = calcRemaining(total, deposit > 0, deposit);
+  const remaining = calcRemaining(total, false, deposit);
 
   info.textContent = `Ausgewählt: ${product.display_name}`;
+
   summary.innerHTML =
     `<strong>${escHtml(product.display_name)}</strong><br>` +
     `Gesamtbetrag: <strong>${escHtml(euro(total))}</strong><br>` +
-    `Anzahlung (${depositPercent}%): <strong>${escHtml(euro(deposit))}</strong><br>` +
-    `Restbetrag: <strong>${escHtml(euro(remaining))}</strong>`;
+    `Anzahlung wird nicht automatisch aktiviert.<br>` +
+    `Möglicher Anzahlungsbetrag (${depositPercent}%): <strong>${escHtml(euro(deposit))}</strong><br>` +
+    `Restbetrag aktuell: <strong>${escHtml(euro(remaining))}</strong>`;
 }
 
 async function submitNewOrder(e) {
@@ -766,7 +627,7 @@ async function submitNewOrder(e) {
   }
 
   if (!product) {
-    alert("Bitte ein gültiges Fahrzeug aus der Suche auswählen.");
+    alert("Bitte ein gültiges Fahrzeug oder Upgrade aus der Suche auswählen.");
     return;
   }
 
@@ -779,7 +640,7 @@ async function submitNewOrder(e) {
     const depositPercent = await loadDefaultDepositPercent();
     const total = Number(product.price || 0);
     const deposit = Math.round(total * (depositPercent / 100));
-    const depositRequired = deposit > 0;
+    const depositRequired = false;
     const remaining = calcRemaining(total, depositRequired, deposit);
     const orderNumber = generateOrderNumber();
 
@@ -883,137 +744,39 @@ function buildOrdersTable(data, mode) {
       </thead>
 
       <tbody>
-        ${(data || [])
-          .map((o) => {
-            const summary = orderItemsSummary(o);
-            const rowEditableAll = canEditAll;
-            const openEditable = !isFinishedMode;
+        ${(data || []).map((o) => {
+          const summary = orderItemsSummary(o);
+          const rowEditableAll = canEditAll;
+          const openEditable = !isFinishedMode;
 
-            const calculatedRemaining = calcRemaining(
-              o.invoice_total || o.total_price || 0,
-              o.deposit_required,
-              o.deposit_amount || 0
-            );
+          const calculatedRemaining = calcRemaining(o.invoice_total || o.total_price || 0, o.deposit_required, o.deposit_amount || 0);
 
-            return `
-              <tr
-                data-id="${escHtml(o.id)}"
-                data-invoice-total="${escHtml(o.invoice_total || o.total_price || 0)}"
-                data-deposit-required="${o.deposit_required ? "true" : "false"}"
-                data-deposit-amount="${escHtml(o.deposit_amount || 0)}"
-              >
-                <td>
-                  ${
-                    rowEditableAll
-                      ? input(formatDateInput(o.created_at), "created_at", "datetime-local")
-                      : escHtml(formatDate(o.created_at))
-                  }
-                </td>
-
-                <td>
-                  ${
-                    rowEditableAll
-                      ? input(o.order_number || "", "order_number")
-                      : `<strong>${escHtml(o.order_number || "")}</strong>`
-                  }
-                </td>
-
-                <td>
-                  ${
-                    rowEditableAll
-                      ? input(o.customer_name || "", "customer_name")
-                      : escHtml(o.customer_name || "")
-                  }
-                </td>
-
-                <td>
-                  ${
-                    rowEditableAll
-                      ? textarea(o.production_summary || summary || "", "production_summary")
-                      : escHtml(summary || "")
-                  }
-                </td>
-
-                <td>
-                  ${
-                    openEditable || rowEditableAll
-                      ? `<select class="input" data-name="_status_label">${renderStatusOptions(o.status, o.public_status_label)}</select>`
-                      : escHtml(o.public_status_label || o.status || "")
-                  }
-                </td>
-
-                <td>
-                  ${
-                    openEditable || rowEditableAll
-                      ? `<label class="small"><input data-name="deposit_required" type="checkbox" ${o.deposit_required ? "checked" : ""}> ja</label>`
-                      : o.deposit_required
-                        ? "Ja"
-                        : "Nein"
-                  }
-                </td>
-
-                <td>
-                  ${
-                    rowEditableAll
-                      ? input(o.deposit_amount ?? 0, "deposit_amount", "number")
-                      : euro(o.deposit_amount || 0)
-                  }
-                </td>
-
-                <td>
-                  ${
-                    openEditable || rowEditableAll
-                      ? input(o.responsible_text || "", "responsible_text")
-                      : escHtml(o.responsible_text || "")
-                  }
-                </td>
-
-                <td>
-                  ${
-                    rowEditableAll
-                      ? input(o.invoice_total ?? o.total_price ?? 0, "invoice_total", "number")
-                      : euro(o.invoice_total || o.total_price || 0)
-                  }
-                </td>
-
-                <td>
-                  <strong data-role="invoice_remaining_display">${escHtml(euro(calculatedRemaining))}</strong>
-                </td>
-
-                <td>
-                  ${
-                    openEditable || rowEditableAll
-                      ? textarea(o.public_info || "", "public_info")
-                      : escHtml(o.public_info || "")
-                  }
-                </td>
-
-                <td>
-                  ${
-                    openEditable || rowEditableAll
-                      ? `<label class="small"><input data-name="invoice_paid" type="checkbox" ${o.invoice_paid ? "checked" : ""}> bezahlt</label>`
-                      : o.invoice_paid
-                        ? "Ja"
-                        : "Nein"
-                  }
-                </td>
-
-                <td>
-                  ${
-                    openEditable || rowEditableAll
-                      ? `<button class="btn saveOrder" type="button" data-mode="${mode}">Speichern</button>`
-                      : ""
-                  }
-                  ${
-                    isFinishedMode && currentUserRole === "admin"
-                      ? `<button class="btn btn-danger hideFinishedOrder" type="button">Ausblenden</button>`
-                      : ""
-                  }
-                </td>
-              </tr>
-            `;
-          })
-          .join("")}
+          return `
+            <tr
+              data-id="${escHtml(o.id)}"
+              data-invoice-total="${escHtml(o.invoice_total || o.total_price || 0)}"
+              data-deposit-required="${o.deposit_required ? "true" : "false"}"
+              data-deposit-amount="${escHtml(o.deposit_amount || 0)}"
+            >
+              <td>${rowEditableAll ? input(formatDateInput(o.created_at), "created_at", "datetime-local") : escHtml(formatDate(o.created_at))}</td>
+              <td>${rowEditableAll ? input(o.order_number || "", "order_number") : `<strong>${escHtml(o.order_number || "")}</strong>`}</td>
+              <td>${rowEditableAll ? input(o.customer_name || "", "customer_name") : escHtml(o.customer_name || "")}</td>
+              <td>${rowEditableAll ? textarea(o.production_summary || summary || "", "production_summary") : escHtml(summary || "")}</td>
+              <td>${openEditable || rowEditableAll ? `<select class="input" data-name="_status_label">${renderStatusOptions(o.status, o.public_status_label)}</select>` : escHtml(o.public_status_label || o.status || "")}</td>
+              <td>${openEditable || rowEditableAll ? `<label class="small"><input data-name="deposit_required" type="checkbox" ${o.deposit_required ? "checked" : ""}> ja</label>` : o.deposit_required ? "Ja" : "Nein"}</td>
+              <td>${rowEditableAll ? input(o.deposit_amount ?? 0, "deposit_amount", "number") : euro(o.deposit_amount || 0)}</td>
+              <td>${openEditable || rowEditableAll ? input(o.responsible_text || "", "responsible_text") : escHtml(o.responsible_text || "")}</td>
+              <td>${rowEditableAll ? input(o.invoice_total ?? o.total_price ?? 0, "invoice_total", "number") : euro(o.invoice_total || o.total_price || 0)}</td>
+              <td><strong data-role="invoice_remaining_display">${escHtml(euro(calculatedRemaining))}</strong></td>
+              <td>${openEditable || rowEditableAll ? textarea(o.public_info || "", "public_info") : escHtml(o.public_info || "")}</td>
+              <td>${openEditable || rowEditableAll ? `<label class="small"><input data-name="invoice_paid" type="checkbox" ${o.invoice_paid ? "checked" : ""}> bezahlt</label>` : o.invoice_paid ? "Ja" : "Nein"}</td>
+              <td>
+                ${openEditable || rowEditableAll ? `<button class="btn saveOrder" type="button" data-mode="${mode}">Speichern</button>` : ""}
+                ${isFinishedMode && currentUserRole === "admin" ? `<button class="btn btn-danger hideFinishedOrder" type="button">Ausblenden</button>` : ""}
+              </td>
+            </tr>
+          `;
+        }).join("")}
       </tbody>
     </table>
   `;
@@ -1065,13 +828,9 @@ async function loadOrdersByMode(mode) {
       .order("created_at", { ascending: false });
 
     if (isFinishedMode) {
-      query = query
-        .in("status", FINISHED_STATUSES)
-        .eq("admin_hidden", false);
+      query = query.in("status", FINISHED_STATUSES).eq("admin_hidden", false);
     } else {
-      query = query
-        .not("status", "in", `(${FINISHED_STATUSES.join(",")})`)
-        .eq("admin_hidden", false);
+      query = query.not("status", "in", `(${FINISHED_STATUSES.join(",")})`).eq("admin_hidden", false);
     }
 
     const { data, error } = await query.limit(500);
@@ -1080,13 +839,8 @@ async function loadOrdersByMode(mode) {
 
     c.innerHTML = buildOrdersTable(data || [], mode);
 
-    document.querySelectorAll(".saveOrder").forEach((btn) => {
-      btn.onclick = saveOrder;
-    });
-
-    document.querySelectorAll(".hideFinishedOrder").forEach((btn) => {
-      btn.onclick = hideFinishedOrder;
-    });
+    document.querySelectorAll(".saveOrder").forEach((btn) => btn.onclick = saveOrder);
+    document.querySelectorAll(".hideFinishedOrder").forEach((btn) => btn.onclick = hideFinishedOrder);
 
     bindOrderCalculationEvents();
   } catch (error) {
@@ -1100,7 +854,6 @@ async function saveOrder(e) {
   const id = tr.dataset.id;
   const mode = e.target.dataset.mode || "open";
   const isFinishedMode = mode === "finished";
-
   const obj = {};
 
   tr.querySelectorAll("[data-name]").forEach((el) => {
@@ -1113,32 +866,19 @@ async function saveOrder(e) {
       return;
     }
 
-    if (el.type === "checkbox") {
-      obj[name] = el.checked;
-    } else if (["deposit_amount", "invoice_total"].includes(name)) {
-      obj[name] = Number(el.value || 0);
-    } else if (name === "created_at") {
-      obj[name] = el.value ? new Date(el.value).toISOString() : null;
-    } else {
-      obj[name] = el.value;
-    }
+    if (el.type === "checkbox") obj[name] = el.checked;
+    else if (["deposit_amount", "invoice_total"].includes(name)) obj[name] = Number(el.value || 0);
+    else if (name === "created_at") obj[name] = el.value ? new Date(el.value).toISOString() : null;
+    else obj[name] = el.value;
   });
 
   const invoiceTotalEl = tr.querySelector('[data-name="invoice_total"]');
   const depositRequiredEl = tr.querySelector('[data-name="deposit_required"]');
   const depositAmountEl = tr.querySelector('[data-name="deposit_amount"]');
 
-  const invoiceTotal = invoiceTotalEl
-    ? Number(invoiceTotalEl.value || 0)
-    : Number(tr.dataset.invoiceTotal || 0);
-
-  const depositRequired = depositRequiredEl
-    ? depositRequiredEl.checked
-    : String(tr.dataset.depositRequired || "false") === "true";
-
-  const depositAmount = depositAmountEl
-    ? Number(depositAmountEl.value || 0)
-    : Number(tr.dataset.depositAmount || 0);
+  const invoiceTotal = invoiceTotalEl ? Number(invoiceTotalEl.value || 0) : Number(tr.dataset.invoiceTotal || 0);
+  const depositRequired = depositRequiredEl ? depositRequiredEl.checked : String(tr.dataset.depositRequired || "false") === "true";
+  const depositAmount = depositAmountEl ? Number(depositAmountEl.value || 0) : Number(tr.dataset.depositAmount || 0);
 
   obj.invoice_remaining = calcRemaining(invoiceTotal, depositRequired, depositAmount);
 
@@ -1172,14 +912,14 @@ async function saveOrder(e) {
 
     if (error) throw error;
 
-    if (!data) {
-      throw new Error("Auftrag wurde nicht aktualisiert. Prüfe RLS/Rechte.");
-    }
+    if (!data) throw new Error("Auftrag wurde nicht aktualisiert. Prüfe RLS/Rechte.");
 
     setAdminStatus("✅ Auftrag gespeichert: " + data.order_number);
 
     if (currentTab === "openOrders" && FINISHED_STATUSES.includes(data.status)) {
       await loadOrdersByMode("open");
+    } else if (currentTab === "finishedOrders" && !FINISHED_STATUSES.includes(data.status)) {
+      await loadOrdersByMode("finished");
     } else {
       recalcOrderRowRemaining(tr);
     }
@@ -1202,9 +942,7 @@ async function hideFinishedOrder(e) {
   const tr = e.target.closest("tr");
   const id = tr.dataset.id;
 
-  if (!confirm("Diesen Auftrag aus der fertigen Auftragsübersicht ausblenden? Er bleibt in der Datenbank erhalten.")) {
-    return;
-  }
+  if (!confirm("Diesen Auftrag aus der fertigen Auftragsübersicht ausblenden? Er bleibt in der Datenbank erhalten.")) return;
 
   const btn = e.target;
   btn.disabled = true;
@@ -1220,10 +958,7 @@ async function hideFinishedOrder(e) {
       .maybeSingle();
 
     if (error) throw error;
-
-    if (!data) {
-      throw new Error("Auftrag konnte nicht ausgeblendet werden. Prüfe RLS/Rechte.");
-    }
+    if (!data) throw new Error("Auftrag konnte nicht ausgeblendet werden. Prüfe RLS/Rechte.");
 
     setAdminStatus("✅ Auftrag ausgeblendet: " + data.order_number);
     tr.remove();
@@ -1238,7 +973,7 @@ async function hideFinishedOrder(e) {
 }
 
 /* =========================================================
-   KONTAKTANFRAGEN
+   ANFRAGEN
 ========================================================= */
 
 async function loadContacts() {
@@ -1250,7 +985,7 @@ async function loadContacts() {
     .from("contact_requests")
     .select("*")
     .order("created_at", { ascending: false })
-    .limit(200);
+    .limit(300);
 
   if (error) {
     c.textContent = "Fehler: " + error.message;
@@ -1266,24 +1001,397 @@ async function loadContacts() {
           <th>Betreff</th>
           <th>Nachricht</th>
           <th>Status</th>
+          <th>Mitarbeiter</th>
+          <th>Aktion</th>
         </tr>
       </thead>
-
       <tbody>
-        ${(data || [])
-          .map((r) => `
-            <tr>
-              <td>${new Date(r.created_at).toLocaleString("de-DE")}</td>
-              <td>${escHtml(r.name)}</td>
-              <td>${escHtml(r.subject)}</td>
-              <td><pre>${escHtml(r.message)}</pre></td>
-              <td>${escHtml(r.status)}</td>
-            </tr>
-          `)
-          .join("")}
+        ${(data || []).map((r) => `
+          <tr data-id="${escHtml(r.id)}">
+            <td>${formatDate(r.created_at)}</td>
+            <td>${escHtml(r.name)}</td>
+            <td>${escHtml(r.subject)}</td>
+            <td><pre>${escHtml(r.message)}</pre></td>
+            <td>${escHtml(r.status)}</td>
+            <td>${input(r.responsible_text || "", "responsible_text")}</td>
+            <td><button class="btn saveContactResponsible" type="button">Speichern</button></td>
+          </tr>
+        `).join("")}
       </tbody>
     </table>
   `;
+
+  document.querySelectorAll(".saveContactResponsible").forEach((btn) => btn.onclick = saveContactResponsible);
+}
+
+async function saveContactResponsible(e) {
+  const tr = e.target.closest("tr");
+  const id = tr.dataset.id;
+  const responsibleText = tr.querySelector('[data-name="responsible_text"]').value;
+
+  const btn = e.target;
+  btn.disabled = true;
+  btn.textContent = "Speichere…";
+
+  try {
+    const { error } = await window.lfcSupabase
+      .from("contact_requests")
+      .update({ responsible_text: responsibleText })
+      .eq("id", id);
+
+    if (error) throw error;
+
+    setAdminStatus("✅ Anfrage gespeichert.");
+  } catch (error) {
+    alert(error.message || String(error));
+    setAdminStatus("❌ Fehler beim Speichern.");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Speichern";
+  }
+}
+
+/* =========================================================
+   TERMINE
+========================================================= */
+
+async function loadAppointments() {
+  const c = document.getElementById("content");
+  c.innerHTML = "Lade Termine…";
+  setAdminStatus("");
+
+  const { data, error } = await window.lfcSupabase
+    .from("appointment_requests")
+    .select("*")
+    .order("requested_date", { ascending: false })
+    .order("requested_time", { ascending: false })
+    .limit(300);
+
+  if (error) {
+    c.textContent = "Fehler: " + error.message;
+    return;
+  }
+
+  c.innerHTML = `
+    <table class="admin-table">
+      <thead>
+        <tr>
+          <th>Erstellt</th>
+          <th>Name</th>
+          <th>Datum</th>
+          <th>Uhrzeit</th>
+          <th>Grund</th>
+          <th>Status</th>
+          <th>Mitarbeiter</th>
+          <th>Aktion</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${(data || []).map((r) => `
+          <tr data-id="${escHtml(r.id)}">
+            <td>${formatDate(r.created_at)}</td>
+            <td>${escHtml(r.name)}</td>
+            <td>${escHtml(r.requested_date)}</td>
+            <td>${escHtml(r.requested_time)}</td>
+            <td><pre>${escHtml(r.reason)}</pre></td>
+            <td>${escHtml(r.status)}</td>
+            <td>${input(r.responsible_text || "", "responsible_text")}</td>
+            <td><button class="btn saveAppointmentResponsible" type="button">Speichern</button></td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  `;
+
+  document.querySelectorAll(".saveAppointmentResponsible").forEach((btn) => btn.onclick = saveAppointmentResponsible);
+}
+
+async function saveAppointmentResponsible(e) {
+  const tr = e.target.closest("tr");
+  const id = tr.dataset.id;
+  const responsibleText = tr.querySelector('[data-name="responsible_text"]').value;
+
+  const btn = e.target;
+  btn.disabled = true;
+  btn.textContent = "Speichere…";
+
+  try {
+    const { error } = await window.lfcSupabase
+      .from("appointment_requests")
+      .update({ responsible_text: responsibleText })
+      .eq("id", id);
+
+    if (error) throw error;
+
+    setAdminStatus("✅ Termin gespeichert.");
+  } catch (error) {
+    alert(error.message || String(error));
+    setAdminStatus("❌ Fehler beim Speichern.");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Speichern";
+  }
+}
+
+/* =========================================================
+   EINSTELLUNGEN
+========================================================= */
+
+async function loadSettings() {
+  const c = document.getElementById("content");
+  c.innerHTML = "Lade Einstellungen…";
+  setAdminStatus("");
+
+  if (!canAccessRole("manager")) {
+    c.textContent = "Kein Zugriff.";
+    return;
+  }
+
+  const { data: profiles, error: profilesError } = await window.lfcSupabase
+    .from("profiles")
+    .select("id,email,display_name,role,is_active")
+    .order("email", { ascending: true });
+
+  if (profilesError) {
+    c.textContent = "Fehler: " + profilesError.message;
+    return;
+  }
+
+  const { data: calendarSetting } = await window.lfcSupabase
+    .from("app_settings")
+    .select("setting_value")
+    .eq("setting_key", "appointment_calendar_settings")
+    .maybeSingle();
+
+  const calendar = calendarSetting?.setting_value || {
+    enabled: true,
+    days: {}
+  };
+
+  const dayLabels = {
+    monday: "Montag",
+    tuesday: "Dienstag",
+    wednesday: "Mittwoch",
+    thursday: "Donnerstag",
+    friday: "Freitag",
+    saturday: "Samstag",
+    sunday: "Sonntag"
+  };
+
+  c.innerHTML = `
+    <section class="settings-card">
+      <h2>Einstellungen</h2>
+
+      <article class="bt-card">
+        <h3>Mitarbeiter-Verwaltung</h3>
+
+        <form id="createUserForm" class="shop-form">
+          <div class="settings-grid">
+            <div class="shop-field">
+              <label>E-Mail</label>
+              <input class="input" id="newUserEmail" type="email" required placeholder="mitarbeiter@example.de">
+            </div>
+
+            <div class="shop-field">
+              <label>Name</label>
+              <input class="input" id="newUserName" type="text" placeholder="Anzeigename">
+            </div>
+
+            <div class="shop-field">
+              <label>Passwort</label>
+              <input class="input" id="newUserPassword" type="password" required placeholder="Start-Passwort">
+            </div>
+
+            <div class="shop-field">
+              <label>Rang</label>
+              <select class="input" id="newUserRole">
+                ${ROLE_OPTIONS.map((r) => `<option value="${r}">${r}</option>`).join("")}
+              </select>
+            </div>
+          </div>
+
+          <button class="btn" type="submit">Mitarbeiter anlegen</button>
+          <div class="small">Hinweis: Dafür muss die Supabase Edge Function <code>admin-create-user</code> eingerichtet sein.</div>
+        </form>
+
+        <hr>
+
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>E-Mail</th>
+              <th>Name</th>
+              <th>Rang</th>
+              <th>Aktiv</th>
+              <th>Aktion</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${(profiles || []).map((p) => `
+              <tr data-id="${escHtml(p.id)}">
+                <td>${escHtml(p.email)}</td>
+                <td>${input(p.display_name || "", "display_name")}</td>
+                <td>
+                  <select class="input" data-name="role">
+                    ${ROLE_OPTIONS.map((r) => `<option value="${r}" ${p.role === r ? "selected" : ""}>${r}</option>`).join("")}
+                  </select>
+                </td>
+                <td>
+                  <label class="small"><input type="checkbox" data-name="is_active" ${p.is_active ? "checked" : ""}> aktiv</label>
+                </td>
+                <td><button class="btn saveProfile" type="button">Speichern</button></td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </article>
+
+      <article class="bt-card">
+        <h3>Kalender-Einstellungen für Terminanfragen</h3>
+
+        <form id="calendarSettingsForm" class="shop-form">
+          <label class="small">
+            <input type="checkbox" id="calendarEnabled" ${calendar.enabled ? "checked" : ""}>
+            Terminanfragen aktiv
+          </label>
+
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>Tag</th>
+                <th>Aktiv</th>
+                <th>Von</th>
+                <th>Bis</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${Object.keys(dayLabels).map((key) => {
+                const d = calendar.days?.[key] || { enabled: false, from: "10:00", to: "18:00" };
+                return `
+                  <tr data-day="${key}">
+                    <td>${dayLabels[key]}</td>
+                    <td><input type="checkbox" data-field="enabled" ${d.enabled ? "checked" : ""}></td>
+                    <td><input class="input" type="time" data-field="from" value="${escHtml(d.from || "10:00")}"></td>
+                    <td><input class="input" type="time" data-field="to" value="${escHtml(d.to || "18:00")}"></td>
+                  </tr>
+                `;
+              }).join("")}
+            </tbody>
+          </table>
+
+          <button class="btn" type="submit">Kalender-Einstellungen speichern</button>
+        </form>
+      </article>
+    </section>
+  `;
+
+  document.getElementById("createUserForm").addEventListener("submit", createUserFromSettings);
+  document.querySelectorAll(".saveProfile").forEach((btn) => btn.onclick = saveProfile);
+  document.getElementById("calendarSettingsForm").addEventListener("submit", saveCalendarSettings);
+}
+
+async function createUserFromSettings(e) {
+  e.preventDefault();
+
+  const email = document.getElementById("newUserEmail").value.trim();
+  const password = document.getElementById("newUserPassword").value;
+  const displayName = document.getElementById("newUserName").value.trim();
+  const role = document.getElementById("newUserRole").value;
+
+  if (!email || !password) {
+    alert("Bitte E-Mail und Passwort eintragen.");
+    return;
+  }
+
+  const { data: sessionData } = await window.lfcSupabase.auth.getSession();
+  const token = sessionData?.session?.access_token;
+
+  if (!token) {
+    alert("Keine aktive Session gefunden.");
+    return;
+  }
+
+  try {
+    const res = await fetch(`${window.LFC_SUPABASE_CONFIG.url}/functions/v1/admin-create-user`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + token
+      },
+      body: JSON.stringify({
+        email,
+        password,
+        display_name: displayName,
+        role
+      })
+    });
+
+    const body = await res.json().catch(() => ({}));
+
+    if (!res.ok || body.ok === false) {
+      throw new Error(body.error || "Benutzer konnte nicht angelegt werden.");
+    }
+
+    setAdminStatus("✅ Mitarbeiter angelegt.");
+    loadSettings();
+  } catch (error) {
+    alert(error.message || String(error));
+    setAdminStatus("❌ Mitarbeiter konnte nicht angelegt werden.");
+  }
+}
+
+async function saveProfile(e) {
+  const tr = e.target.closest("tr");
+  const id = tr.dataset.id;
+
+  const obj = {};
+  tr.querySelectorAll("[data-name]").forEach((el) => {
+    if (el.type === "checkbox") obj[el.dataset.name] = el.checked;
+    else obj[el.dataset.name] = el.value;
+  });
+
+  const { error } = await window.lfcSupabase
+    .from("profiles")
+    .update(obj)
+    .eq("id", id);
+
+  if (error) {
+    alert(error.message);
+  } else {
+    setAdminStatus("✅ Mitarbeiter gespeichert.");
+  }
+}
+
+async function saveCalendarSettings(e) {
+  e.preventDefault();
+
+  const days = {};
+  document.querySelectorAll("#calendarSettingsForm tr[data-day]").forEach((tr) => {
+    const key = tr.dataset.day;
+    days[key] = {
+      enabled: tr.querySelector('[data-field="enabled"]').checked,
+      from: tr.querySelector('[data-field="from"]').value,
+      to: tr.querySelector('[data-field="to"]').value
+    };
+  });
+
+  const setting = {
+    enabled: document.getElementById("calendarEnabled").checked,
+    days
+  };
+
+  const { error } = await window.lfcSupabase
+    .from("app_settings")
+    .update({
+      setting_value: setting
+    })
+    .eq("setting_key", "appointment_calendar_settings");
+
+  if (error) {
+    alert(error.message);
+  } else {
+    setAdminStatus("✅ Kalender-Einstellungen gespeichert.");
+  }
 }
 
 /* =========================================================
@@ -1296,6 +1404,8 @@ async function loadTab() {
   if (currentTab === "openOrders") return loadOrdersByMode("open");
   if (currentTab === "finishedOrders") return loadOrdersByMode("finished");
   if (currentTab === "contacts") return loadContacts();
+  if (currentTab === "appointments") return loadAppointments();
+  if (currentTab === "settings") return loadSettings();
 
   return loadVehicles();
 }
