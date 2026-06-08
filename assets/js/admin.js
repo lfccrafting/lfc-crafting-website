@@ -887,9 +887,13 @@ async function loadOrdersByMode(mode) {
       .order("created_at", { ascending: false });
 
     if (isFinishedMode) {
-      query = query.in("status", FINISHED_STATUSES).eq("admin_hidden", false);
+      query = query
+        .eq("invoice_paid", true)
+        .eq("admin_hidden", false);
     } else {
-      query = query.not("status", "in", `(${FINISHED_STATUSES.join(",")})`).eq("admin_hidden", false);
+      query = query
+        .eq("invoice_paid", false)
+        .eq("admin_hidden", false);
     }
 
     const { data, error } = await query.limit(500);
