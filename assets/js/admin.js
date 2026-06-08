@@ -5,7 +5,7 @@ let currentUserRole = null;
 
 const FINISHED_STATUSES = ["completed", "cancelled", "rejected"];
 
-const ORDER_STATUS_OPTIONS = [ 
+const ORDER_STATUS_OPTIONS = [
   {
     label: "Bestellung ist eingegangen",
     status: "new",
@@ -56,6 +56,39 @@ function input(value, name, type = "text", extra = "") {
 
 function textarea(value, name, extra = "") {
   return `<textarea class="input" data-name="${name}" ${extra}>${escHtml(value || "")}</textarea>`;
+}
+
+function roleLevel(role) {
+  if (role === "employee") return 1;
+  if (role === "manager") return 2;
+  if (role === "admin") return 3;
+  return 0;
+}
+
+function canAccessRole(minRole) {
+  return roleLevel(currentUserRole) >= roleLevel(minRole || "employee");
+}
+
+function applyTabVisibility() {
+  document.querySelectorAll(".tab").forEach((tab) => {
+    const minRole = tab.dataset.minRole || "employee";
+    const allowed = canAccessRole(minRole);
+    tab.style.display = allowed ? "" : "none";
+  });
+
+  const activeTab = document.querySelector(".tab.active");
+
+  if (!activeTab || activeTab.style.display === "none") {
+    const firstAllowed = Array.from(document.querySelectorAll(".tab"))
+      .find((tab) => tab.style.display !== "none");
+
+    document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
+
+    if (firstAllowed) {
+      firstAllowed.classList.add("active");
+      currentTab = firstAllowed.dataset.tab;
+    }
+  }
 }
 
 function setAdminStatus(message, type = "") {
@@ -112,9 +145,7 @@ function euro(value) {
 function normalizePreviewImageUrl(url) {
   const s = String(url || "").trim();
   if (!s) return "";
-
   if (!/^https:\/\//i.test(s)) return "";
-
   return s;
 }
 
@@ -231,6 +262,47 @@ function calcRemaining(invoiceTotal, depositRequired, depositAmount) {
   return Math.max(0, total - deposit);
 }
 
+function recalcOrderRowRemaining(tr) {
+  if (!tr) return;
+
+  const invoiceTotalEl = tr.querySelector('[data-name="invoice_total"]');
+  const depositRequiredEl = tr.querySelector('[data-name="deposit_required"]');
+  const depositAmountEl = tr.querySelector('[data-name="deposit_amount"]');
+  const remainingEl = tr.querySelector('[data-role="invoice_remaining_display"]');
+
+  if (!remainingEl) return;
+
+  const invoiceTotal = invoiceTotalEl
+    ? Number(invoiceTotalEl.value || 0)
+    : Number(tr.dataset.invoiceTotal || 0);
+
+  const depositRequired = depositRequiredEl
+    ? depositRequiredEl.checked
+    : String(tr.dataset.depositRequired || "false") === "true";
+
+  const depositAmount = depositAmountEl
+    ? Number(depositAmountEl.value || 0)
+    : Number(tr.dataset.depositAmount || 0);
+
+  const remaining = calcRemaining(invoiceTotal, depositRequired, depositAmount);
+
+  remainingEl.textContent = euro(remaining);
+}
+
+function bindOrderCalculationEvents() {
+  document.querySelectorAll(".orders-table tbody tr").forEach((tr) => {
+    ["invoice_total", "deposit_amount", "deposit_required"].forEach((name) => {
+      const el = tr.querySelector(`[data-name="${name}"]`);
+      if (!el) return;
+
+      el.addEventListener("input", () => recalcOrderRowRemaining(tr));
+      el.addEventListener("change", () => recalcOrderRowRemaining(tr));
+    });
+
+    recalcOrderRowRemaining(tr);
+  });
+}
+
 function generateOrderNumber() {
   const d = new Date();
   const pad = (n) => String(n).padStart(2, "0");
@@ -311,11 +383,7 @@ async function requireLogin() {
   document.getElementById("authStatus").textContent =
     `✅ Eingeloggt als ${data.user.email} (${profile.role})`;
 
-  if (currentUserRole !== "admin") {
-    document.querySelectorAll(".admin-only-tab").forEach((el) => {
-      el.style.display = "none";
-    });
-  }
+  applyTabVisibility();
 
   return true;
 }
@@ -730,6 +798,7 @@ async function submitNewOrder(e) {
         deposit_amount: deposit,
         invoice_remaining: remaining,
         invoice_paid: false,
+        admin_hidden: false,
         source: "admin"
       })
       .select("id, order_number")
@@ -827,7 +896,12 @@ function buildOrdersTable(data, mode) {
             );
 
             return `
-              <tr data-id="${escHtml(o.id)}">
+              <tr
+                data-id="${escHtml(o.id)}"
+                data-invoice-total="${escHtml(o.invoice_total || o.total_price || 0)}"
+                data-deposit-required="${o.deposit_required ? "true" : "false"}"
+                data-deposit-amount="${escHtml(o.deposit_amount || 0)}"
+              >
                 <td>
                   ${
                     rowEditableAll
@@ -903,7 +977,7 @@ function buildOrdersTable(data, mode) {
                 </td>
 
                 <td>
-                  ${escHtml(euro(calculatedRemaining))}
+                  <strong data-role="invoice_remaining_display">${escHtml(euro(calculatedRemaining))}</strong>
                 </td>
 
                 <td>
@@ -928,6 +1002,11 @@ function buildOrdersTable(data, mode) {
                   ${
                     openEditable || rowEditableAll
                       ? `<button class="btn saveOrder" type="button" data-mode="${mode}">Speichern</button>`
+                      : ""
+                  }
+                  ${
+                    isFinishedMode && currentUserRole === "admin"
+                      ? `<button class="btn btn-danger hideFinishedOrder" type="button">Ausblenden</button>`
                       : ""
                   }
                 </td>
@@ -970,6 +1049,7 @@ async function loadOrdersByMode(mode) {
         invoice_total,
         invoice_remaining,
         invoice_paid,
+        admin_hidden,
         total_price,
         public_info,
         invoice_status,
@@ -985,9 +1065,13 @@ async function loadOrdersByMode(mode) {
       .order("created_at", { ascending: false });
 
     if (isFinishedMode) {
-      query = query.in("status", FINISHED_STATUSES);
+      query = query
+        .in("status", FINISHED_STATUSES)
+        .eq("admin_hidden", false);
     } else {
-      query = query.not("status", "in", `(${FINISHED_STATUSES.join(",")})`);
+      query = query
+        .not("status", "in", `(${FINISHED_STATUSES.join(",")})`)
+        .eq("admin_hidden", false);
     }
 
     const { data, error } = await query.limit(500);
@@ -999,6 +1083,12 @@ async function loadOrdersByMode(mode) {
     document.querySelectorAll(".saveOrder").forEach((btn) => {
       btn.onclick = saveOrder;
     });
+
+    document.querySelectorAll(".hideFinishedOrder").forEach((btn) => {
+      btn.onclick = hideFinishedOrder;
+    });
+
+    bindOrderCalculationEvents();
   } catch (error) {
     console.error(error);
     c.textContent = "Fehler: " + (error.message || String(error));
@@ -1033,6 +1123,24 @@ async function saveOrder(e) {
       obj[name] = el.value;
     }
   });
+
+  const invoiceTotalEl = tr.querySelector('[data-name="invoice_total"]');
+  const depositRequiredEl = tr.querySelector('[data-name="deposit_required"]');
+  const depositAmountEl = tr.querySelector('[data-name="deposit_amount"]');
+
+  const invoiceTotal = invoiceTotalEl
+    ? Number(invoiceTotalEl.value || 0)
+    : Number(tr.dataset.invoiceTotal || 0);
+
+  const depositRequired = depositRequiredEl
+    ? depositRequiredEl.checked
+    : String(tr.dataset.depositRequired || "false") === "true";
+
+  const depositAmount = depositAmountEl
+    ? Number(depositAmountEl.value || 0)
+    : Number(tr.dataset.depositAmount || 0);
+
+  obj.invoice_remaining = calcRemaining(invoiceTotal, depositRequired, depositAmount);
 
   if (!isFinishedMode && currentUserRole !== "admin") {
     const allowed = [
@@ -1072,6 +1180,8 @@ async function saveOrder(e) {
 
     if (currentTab === "openOrders" && FINISHED_STATUSES.includes(data.status)) {
       await loadOrdersByMode("open");
+    } else {
+      recalcOrderRowRemaining(tr);
     }
   } catch (error) {
     console.error(error);
@@ -1080,6 +1190,50 @@ async function saveOrder(e) {
   } finally {
     saveButton.disabled = false;
     saveButton.textContent = "Speichern";
+  }
+}
+
+async function hideFinishedOrder(e) {
+  if (currentUserRole !== "admin") {
+    alert("Nur Admins dürfen fertige Aufträge ausblenden.");
+    return;
+  }
+
+  const tr = e.target.closest("tr");
+  const id = tr.dataset.id;
+
+  if (!confirm("Diesen Auftrag aus der fertigen Auftragsübersicht ausblenden? Er bleibt in der Datenbank erhalten.")) {
+    return;
+  }
+
+  const btn = e.target;
+  btn.disabled = true;
+  btn.textContent = "Blende aus…";
+  setAdminStatus("");
+
+  try {
+    const { data, error } = await window.lfcSupabase
+      .from("orders")
+      .update({ admin_hidden: true })
+      .eq("id", id)
+      .select("id, order_number")
+      .maybeSingle();
+
+    if (error) throw error;
+
+    if (!data) {
+      throw new Error("Auftrag konnte nicht ausgeblendet werden. Prüfe RLS/Rechte.");
+    }
+
+    setAdminStatus("✅ Auftrag ausgeblendet: " + data.order_number);
+    tr.remove();
+  } catch (error) {
+    console.error(error);
+    alert(error.message || String(error));
+    setAdminStatus("❌ Fehler beim Ausblenden.");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Ausblenden";
   }
 }
 
@@ -1149,8 +1303,10 @@ async function loadTab() {
 document.addEventListener("DOMContentLoaded", async () => {
   document.querySelectorAll(".tab").forEach((button) => {
     button.onclick = () => {
-      if (button.dataset.tab === "finishedOrders" && currentUserRole !== "admin") {
-        alert("Fertige Aufträge dürfen nur von Admins geöffnet werden.");
+      const minRole = button.dataset.minRole || "employee";
+
+      if (!canAccessRole(minRole)) {
+        alert("Du hast keinen Zugriff auf diesen Bereich.");
         return;
       }
 
@@ -1162,6 +1318,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   if (await requireLogin()) {
+    applyTabVisibility();
     loadTab();
   }
 });
