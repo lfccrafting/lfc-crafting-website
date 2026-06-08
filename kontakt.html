@@ -1,1 +1,279 @@
-<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>LFC – Kontakt</title><link rel="icon" href="lfc.favicon.ico"><link rel="stylesheet" href="assets/css/lfc.background.css"><link rel="stylesheet" href="assets/css/lfc.css"><script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script defer src="assets/js/config.js"></script><script defer src="assets/js/supabase-client.js"></script><script defer src="assets/js/lfc.background.js"></script><script defer src="assets/js/common.js"></script><script defer src="assets/js/kontakt.js"></script><style>.bt-page{max-width:1200px;margin:0 auto;padding:18px 14px 30px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:900px){.grid{grid-template-columns:1fr}}.field{margin-bottom:12px}.field label{display:block;font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.85;margin-bottom:6px}.field input,.field textarea{width:100%;padding:10px 12px;border:1px solid rgba(255,255,255,.14);background:rgba(0,0,0,.18);color:inherit}.field textarea{min-height:130px}.btn{padding:10px 12px;border:1px solid rgba(255,255,255,.18);background:transparent;color:inherit;cursor:pointer}.status{font-size:13px;min-height:1.1em;opacity:.85}</style></head><body><div id="bt-glow-orbits"></div><div id="bt-points"></div><header id="bt-navbar" class="bt-header"></header><main class="bt-page"><section class="bt-card"><div class="bt-pill"><span class="bt-pill-dot"></span><span>Kontakt</span></div><h1>Kontakt</h1><p class="bt-text-muted">Schreib uns eine Nachricht oder stelle direkt eine Terminanfrage.</p></section><section class="grid" style="margin-top:16px"><form id="kontaktForm" class="bt-card"><h2>Nachricht senden</h2><div class="field"><label>Name *</label><input id="kontaktName" required></div><div class="field"><label>Betreff *</label><input id="kontaktSubject" required></div><div class="field"><label>Nachricht *</label><textarea id="kontaktMessage" required></textarea></div><button class="btn" type="submit">Senden</button><span id="kontaktStatus" class="status"></span></form><form id="terminForm" class="bt-card"><h2>Termin anfragen</h2><p class="bt-text-muted">Di–Fr: 18:30–22:00 · Sa–So: 11:00–22:00</p><div class="field"><label>Name *</label><input id="terminName" required></div><div class="field"><label>Grund *</label><input id="terminReason" required></div><div class="field"><label>Datum *</label><input id="terminDate" type="date" required></div><div class="field"><label>Uhrzeit *</label><input id="terminTime" type="time" step="1800" required></div><button class="btn" type="submit">Termin anfragen</button><span id="terminStatus" class="status"></span></form></section></main><footer id="bt-footer"></footer></body></html>
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>LFC – Kontakt</title>
+
+  <link rel="icon" href="lfc.favicon.ico">
+  <link rel="stylesheet" href="assets/css/lfc.background.css">
+  <link rel="stylesheet" href="assets/css/lfc.css">
+
+  <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script defer src="assets/js/config.js"></script>
+  <script defer src="assets/js/supabase-client.js"></script>
+  <script defer src="assets/js/lfc.background.js"></script>
+  <script defer src="assets/js/common.js"></script>
+  <script defer src="assets/js/kontakt.js"></script>
+
+  <style>
+    .contact-layout{
+      display:grid;
+      grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+      gap:18px;
+      align-items:start;
+    }
+
+    .contact-card{
+      display:grid;
+      gap:14px;
+    }
+
+    .shop-form{
+      display:grid;
+      gap:12px;
+    }
+
+    .shop-field{
+      display:grid;
+      gap:6px;
+    }
+
+    .shop-field label{
+      font-size:13px;
+      opacity:.9;
+    }
+
+    .input{
+      width:100%;
+      box-sizing:border-box;
+      padding:10px 11px;
+      border:1px solid rgba(255,255,255,.14);
+      background:rgba(0,0,0,.18);
+      color:inherit;
+      outline:none;
+    }
+
+    .input:focus{
+      border-color:rgba(255,153,0,.55);
+      box-shadow:0 0 0 1px rgba(255,153,0,.14);
+    }
+
+    textarea.input{
+      min-height:130px;
+      resize:vertical;
+    }
+
+    .shop-form-actions{
+      display:flex;
+      gap:10px;
+      align-items:center;
+      flex-wrap:wrap;
+    }
+
+    .shop-form-status{
+      min-height:1.2em;
+      font-size:13px;
+    }
+
+    .shop-form-status.ok,
+    .small.ok{
+      color:#7dffb2;
+    }
+
+    .shop-form-status.err,
+    .small.err{
+      color:#ff8c8c;
+    }
+
+    .calendar-info-table{
+      width:100%;
+      border-collapse:collapse;
+      margin-top:8px;
+    }
+
+    .calendar-info-table td{
+      padding:6px 0;
+      border-bottom:1px solid rgba(255,255,255,.08);
+      vertical-align:top;
+    }
+
+    .calendar-info-table td:first-child{
+      width:130px;
+      opacity:.85;
+    }
+
+    .bt-hint strong{
+      color:var(--accent-2,#ffb347);
+    }
+
+    @media(max-width:900px){
+      .contact-layout{
+        grid-template-columns:1fr;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div id="bt-glow-orbits" aria-hidden="true"></div>
+  <div id="bt-points" aria-hidden="true"></div>
+
+  <header id="bt-navbar" class="bt-header"></header>
+
+  <main class="bt-page">
+    <section class="bt-hero">
+      <div class="bt-pill">
+        <span class="bt-pill-dot"></span>
+        <span>Kontakt</span>
+      </div>
+
+      <h1>Kontakt & Terminanfrage</h1>
+
+      <p class="bt-lead">
+        Sende uns eine allgemeine Anfrage oder stelle direkt eine Terminanfrage.
+        Die möglichen Terminzeiten werden automatisch aus den Einstellungen im internen Bereich geladen.
+      </p>
+    </section>
+
+    <section class="contact-layout">
+      <article class="bt-card contact-card">
+        <div>
+          <div class="bt-pill">
+            <span class="bt-pill-dot"></span>
+            <span>Anfrage</span>
+          </div>
+
+          <h2>Kontaktanfrage senden</h2>
+
+          <p class="bt-hint">
+            Nutze dieses Formular für allgemeine Fragen, Kataloganfragen oder Rückmeldungen.
+          </p>
+        </div>
+
+        <form id="contactForm" class="shop-form">
+          <div class="shop-field">
+            <label for="contactName">Name *</label>
+            <input
+              class="input"
+              id="contactName"
+              name="name"
+              type="text"
+              autocomplete="name"
+              required
+              placeholder="Dein Name"
+            >
+          </div>
+
+          <div class="shop-field">
+            <label for="contactSubject">Betreff *</label>
+            <input
+              class="input"
+              id="contactSubject"
+              name="subject"
+              type="text"
+              required
+              placeholder="Betreff der Anfrage"
+            >
+          </div>
+
+          <div class="shop-field">
+            <label for="contactMessage">Nachricht *</label>
+            <textarea
+              class="input"
+              id="contactMessage"
+              name="message"
+              required
+              placeholder="Deine Nachricht"
+            ></textarea>
+          </div>
+
+          <div class="shop-form-actions">
+            <button class="btn" type="submit">Anfrage senden</button>
+          </div>
+
+          <div id="contactStatus" class="shop-form-status" aria-live="polite"></div>
+        </form>
+      </article>
+
+      <article class="bt-card contact-card">
+        <div>
+          <div class="bt-pill">
+            <span class="bt-pill-dot"></span>
+            <span>Termin</span>
+          </div>
+
+          <h2>Terminanfrage senden</h2>
+
+          <p class="bt-hint">
+            Wähle ein Datum und eine Uhrzeit innerhalb der freigegebenen Kalenderzeiten.
+          </p>
+        </div>
+
+        <div id="appointmentCalendarInfo" class="bt-hint" data-appointment-calendar-info>
+          Kalenderzeiten werden geladen …
+        </div>
+
+        <form id="appointmentForm" class="shop-form">
+          <div class="shop-field">
+            <label for="appointmentName">Name *</label>
+            <input
+              class="input"
+              id="appointmentName"
+              name="name"
+              type="text"
+              autocomplete="name"
+              required
+              placeholder="Dein Name"
+            >
+          </div>
+
+          <div class="shop-field">
+            <label for="appointmentDate">Wunschtermin Datum *</label>
+            <input
+              class="input"
+              id="appointmentDate"
+              name="requested_date"
+              type="date"
+              required
+            >
+          </div>
+
+          <div class="shop-field">
+            <label for="appointmentTime">Wunschtermin Uhrzeit *</label>
+            <input
+              class="input"
+              id="appointmentTime"
+              name="requested_time"
+              type="time"
+              required
+            >
+            <div id="appointmentHint" class="small" data-appointment-hint>
+              Bitte zuerst ein Datum auswählen.
+            </div>
+          </div>
+
+          <div class="shop-field">
+            <label for="appointmentReason">Grund / Nachricht *</label>
+            <textarea
+              class="input"
+              id="appointmentReason"
+              name="reason"
+              required
+              placeholder="Worum geht es bei dem Termin?"
+            ></textarea>
+          </div>
+
+          <div class="shop-form-actions">
+            <button class="btn" type="submit">Terminanfrage senden</button>
+          </div>
+
+          <div id="appointmentStatus" class="shop-form-status" aria-live="polite"></div>
+        </form>
+      </article>
+    </section>
+  </main>
+
+  <footer id="bt-footer"></footer>
+</body>
+</html>
