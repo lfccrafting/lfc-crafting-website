@@ -1,29 +1,18 @@
 (function () {
   "use strict";
 
-  /*
-    LFC Katalog
-    - Supabase liefert Preis/Beschreibung/Bilder/Gruppe/Kofferraum
-    - Google Crafting-Sheet liefert weiterhin Upgrade-/Abhängigkeitslogik
-    - Nur LFC, keine Theme-Umschaltung
-  */
+  let vehicles = [];
+  let cards = [];
+  let groups = [];
+  let activeSelection = null;
+
+  let craftDeps = {};
+  let craftParents = {};
+  let craftLoaded = false;
 
   const CRAFT_SHEET_ID = "1ObAKUBNv5IjXEyY0TD85gK9dJhlm8Uq7Qj6QZgHkoZg";
   const TAB_RECIPES = "recipes";
-  const TAB_ITEMS = "recipe_items";
-
-  let vehicles = [];
-  let families = [];
-  let cards = [];
-  let groupSections = [];
-
-  let craftDeps = {};
-  let craftDepsRaw = {};
-  let recipeInfo = {};
-  let craftLoaded = false;
-
-  let currentFamily = null;
-  let activeRequest = null;
+  const TAB_RECIPE_ITEMS = "recipe_items";
 
   const $ = (id) => document.getElementById(id);
 
@@ -39,465 +28,393 @@
     });
   }
 
-  function normText(str) {
-    return String(str ?? "")
+  function norm(s) {
+    return String(s ?? "")
       .toLowerCase()
       .normalize("NFD")
       .replace(/[\u0300-\u036f]/g, "")
-      .replace(/\s+/g, " ")
       .trim();
   }
 
-  function normKey(v) {
-    return String(v ?? "")
+  function normKey(s) {
+    return String(s ?? "")
       .normalize("NFKC")
       .replace(/[\u00A0\u200B\t\n\r]+/g, "")
       .replace(/\s+/g, " ")
       .trim()
-      .replace(/[;:]+$/, "")
       .toLowerCase();
   }
 
-  function groupDomId(name) {
-    return "group-" + normText(name).replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  function slug(s) {
+    return norm(s).replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   }
 
   function euro(value) {
     const n = Number(value || 0);
-    if (!Number.isFinite(n) || n <= 0) return "-";
     return n.toLocaleString("de-DE", {
       style: "currency",
       currency: "EUR",
+      minimumFractionDigits: 0,
       maximumFractionDigits: 0
     });
   }
 
-  function stripBauplan(name) {
-    return String(name || "").replace(/\s*Bauplan\s*$/i, "").trim();
-  }
-
   function normalizeImageUrl(url) {
     const s = String(url || "").trim();
-
-    if (!s) return ""; 
-
-  // Nur echte HTTPS-Bildpfade sind gültig.
-  // Relative Pfade, GitHub-Blob-Pfade, http://, data: und blob: werden ignoriert.
+    if (!s) return "";
     if (!/^https:\/\//i.test(s)) return "";
-
     return s;
   }
 
-  function getVehicleImages(v) {
-    const out = [];
+  function firstImg(v) {
+    const list = imgs(v);
+    return list[0] || "";
+  }
 
-    if (Array.isArray(v.images)) {
-      v.images.forEach((img) => {
-        const url = normalizeImageUrl(img && img.url ? img.url : img);
-        if (url) out.push(url);
+  function imgs(v) {
+    return Array.isArray(v.images)
+      ? v.images.map((x) => normalizeImageUrl(x.url)).filter(Boolean)
+      : [];
+  }
+
+  function groupKey(v) {
+    return v.group_name || "Ohne Gruppe";
+  }
+
+  function vehicleKey(v) {
+    return normKey(v.craft_key || v.blueprint_name || v.display_name || v.id);
+  }
+
+  function vehicleSearchText(v) {
+    return norm([
+      v.display_name,
+      v.blueprint_name,
+      v.description,
+      v.group_name,
+      v.craft_key,
+      v.trunk_size
+    ].join(" "));
+  }
+
+  async function triggerDiscordNotify() {
+    try {
+      if (!window.LFC_SUPABASE_CONFIG?.url) return;
+
+      await fetch(`${window.LFC_SUPABASE_CONFIG.url}/functions/v1/discord-notify`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          mode: "queue",
+          source: "katalog"
+        })
       });
+    } catch (error) {
+      console.warn("Discord Notify konnte nicht ausgelöst werden:", error);
+    }
+  }
+
+  function gvizUrl(sheetName) {
+    return `https://docs.google.com/spreadsheets/d/${encodeURIComponent(CRAFT_SHEET_ID)}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(sheetName)}`;
+  }
+
+  function parseGvizText(text) {
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+
+    if (start < 0 || end < 0) {
+      throw new Error("Ungültige Google-Sheets-GViz-Antwort.");
     }
 
-    const unique = [];
-    const seen = new Set();
-
-    out.forEach((url) => {
-      const key = url.toLowerCase();
-      if (seen.has(key)) return;
-      seen.add(key);
-      unique.push(url);
+    const json = JSON.parse(text.slice(start, end + 1));
+    const cols = (json.table.cols || []).map((c, index) => {
+      const label = String(c.label || c.id || `col_${index}`).trim();
+      return label || `col_${index}`;
     });
 
-    return unique;
-  }
+    return (json.table.rows || []).map((row) => {
+      const obj = {};
 
-  function firstVehicleImage(v) {
-    const imgs = getVehicleImages(v);
-    return imgs[0] || "";
-  }
+      (row.c || []).forEach((cell, index) => {
+        const key = cols[index] || `col_${index}`;
+        obj[key] = cell ? cell.v : "";
+      });
 
-  function pickPictureUrls(pictureField) {
-    const s = String(pictureField || "").trim();
-    if (!s) return [];
-
-    return s
-      .split(";")
-      .map((x) => normalizeImageUrl(x.trim()))
-      .filter(Boolean);
-  }
-
-  function gvizJSONP(sheetName, timeoutMs = 15000) {
-    return new Promise((resolve, reject) => {
-      const cb = "gvizCb_" + Math.random().toString(36).slice(2);
-      const url =
-        "https://docs.google.com/spreadsheets/d/" +
-        encodeURIComponent(CRAFT_SHEET_ID) +
-        "/gviz/tq?tqx=out:json,responseHandler:" +
-        cb +
-        "&headers=1&sheet=" +
-        encodeURIComponent(sheetName);
-
-      const script = document.createElement("script");
-
-      const timer = setTimeout(() => {
-        cleanup();
-        reject(new Error("Timeout beim Laden von " + sheetName));
-      }, timeoutMs);
-
-      function cleanup() {
-        clearTimeout(timer);
-        try {
-          delete window[cb];
-        } catch (e) {
-          window[cb] = undefined;
-        }
-        if (script.parentNode) script.parentNode.removeChild(script);
-      }
-
-      window[cb] = function (payload) {
-        cleanup();
-
-        try {
-          const cols = (payload.table.cols || []).map((c, i) => {
-            return String(c.label || c.id || "c" + i).trim();
-          });
-
-          const rows = (payload.table.rows || []).map((r) => {
-            const o = {};
-            (r.c || []).forEach((cell, i) => {
-              o[cols[i] || "c" + i] = cell ? cell.v : "";
-            });
-            return o;
-          });
-
-          resolve(rows);
-        } catch (e) {
-          reject(e);
-        }
-      };
-
-      script.src = url;
-      script.onerror = function () {
-        cleanup();
-        reject(new Error("GViz konnte nicht geladen werden: " + sheetName));
-      };
-
-      document.head.appendChild(script);
+      return obj;
     });
   }
 
-  async function ensureCraftLoaded() {
-    if (craftLoaded) return;
-
-    const [itemsRows, recipesRows] = await Promise.all([
-      gvizJSONP(TAB_ITEMS),
-      gvizJSONP(TAB_RECIPES)
-    ]);
-
-    const depsMapNorm = {};
-    const depsMapRaw = {};
-
-    itemsRows.forEach((r) => {
-      const productRaw = String(r.product ?? "").trim();
-      const itemRaw = String(r.item ?? "").trim();
-      const qty = Number(r.qty || 0) || 0;
-
-      if (!productRaw || !itemRaw || !qty) return;
-
-      const product = normKey(productRaw);
-      const item = normKey(itemRaw);
-
-      if (!depsMapNorm[product]) depsMapNorm[product] = {};
-      depsMapNorm[product][item] = true;
-
-      if (!depsMapRaw[product]) depsMapRaw[product] = {};
-      depsMapRaw[product][itemRaw] = true;
+  async function fetchGvizSheet(sheetName) {
+    const res = await fetch(gvizUrl(sheetName), {
+      cache: "no-store"
     });
 
+    if (!res.ok) {
+      throw new Error(`Sheet konnte nicht geladen werden: ${sheetName}`);
+    }
+
+    const text = await res.text();
+    return parseGvizText(text);
+  }
+
+  function getRowValue(row, possibleNames) {
+    const entries = Object.entries(row || {});
+    const lowered = entries.map(([key, value]) => [normKey(key), value]);
+
+    for (const name of possibleNames) {
+      const target = normKey(name);
+      const found = lowered.find(([key]) => key === target);
+      if (found) return found[1];
+    }
+
+    for (const name of possibleNames) {
+      const target = normKey(name);
+      const found = lowered.find(([key]) => key.includes(target));
+      if (found) return found[1];
+    }
+
+    return "";
+  }
+
+  function addDep(fromKey, toKey) {
+    const from = normKey(fromKey);
+    const to = normKey(toKey);
+
+    if (!from || !to || from === to) return;
+
+    if (!craftDeps[from]) craftDeps[from] = new Set();
+    if (!craftParents[to]) craftParents[to] = new Set();
+
+    craftDeps[from].add(to);
+    craftParents[to].add(from);
+  }
+
+  async function loadCraftDependencies() {
     craftDeps = {};
-    craftDepsRaw = {};
+    craftParents = {};
+    craftLoaded = false;
 
-    Object.keys(depsMapNorm).forEach((key) => {
-      craftDeps[key] = Object.keys(depsMapNorm[key]);
-    });
+    try {
+      const [recipesRows, itemsRows] = await Promise.all([
+        fetchGvizSheet(TAB_RECIPES),
+        fetchGvizSheet(TAB_RECIPE_ITEMS)
+      ]);
 
-    Object.keys(depsMapRaw).forEach((key) => {
-      craftDepsRaw[key] = Object.keys(depsMapRaw[key]);
-    });
+      const knownVehicleKeys = new Set();
 
-    recipeInfo = {};
+      recipesRows.forEach((row) => {
+        const key =
+          getRowValue(row, ["craft_key", "key", "class", "classname", "recipe", "recipe_key", "name", "item", "result", "output"]) ||
+          "";
 
-    recipesRows.forEach((r) => {
-      const key = normKey(r.key ?? r.Key ?? r.craft ?? r.Craft);
-      if (!key) return;
+        if (key) knownVehicleKeys.add(normKey(key));
+      });
 
-      recipeInfo[key] = {
-        name: String(r.name ?? r.Name ?? "").trim(),
-        picture: String(r.picture ?? r.Picture ?? "").trim(),
-        selectable: r.selectable ?? r.Selectable ?? r.bucket ?? r.Bucket ?? ""
-      };
-    });
+      vehicles.forEach((v) => {
+        knownVehicleKeys.add(vehicleKey(v));
+      });
 
-    craftLoaded = true;
-  }
+      itemsRows.forEach((row) => {
+        const recipe =
+          getRowValue(row, ["recipe", "recipe_key", "craft_key", "target", "result", "output", "output_key", "result_key"]) ||
+          "";
 
-  function craftDependsOn(childKey, ancestorKey) {
-    const start = normKey(childKey);
-    const target = normKey(ancestorKey);
+        const item =
+          getRowValue(row, ["item", "item_key", "input", "input_key", "ingredient", "ingredient_key", "source", "source_key", "required_item"]) ||
+          "";
 
-    if (!start || !target || start === target) return false;
+        const recipeKey = normKey(recipe);
+        const itemKey = normKey(item);
 
-    const visited = {};
-    const stack = [start];
+        if (!recipeKey || !itemKey) return;
 
-    while (stack.length) {
-      const key = stack.pop();
-      const deps = craftDeps[key] || [];
-
-      for (const dep of deps) {
-        if (dep === target) return true;
-
-        if (!visited[dep]) {
-          visited[dep] = true;
-          stack.push(dep);
+        if (knownVehicleKeys.has(recipeKey) && knownVehicleKeys.has(itemKey)) {
+          addDep(itemKey, recipeKey);
         }
-      }
+      });
+
+      craftDeps = Object.fromEntries(
+        Object.entries(craftDeps).map(([key, set]) => [key, Array.from(set)])
+      );
+
+      craftParents = Object.fromEntries(
+        Object.entries(craftParents).map(([key, set]) => [key, Array.from(set)])
+      );
+
+      craftLoaded = true;
+    } catch (error) {
+      console.warn("Upgrade-Daten konnten nicht geladen werden. Katalog läuft ohne Upgrade-Verknüpfung weiter.", error);
+      craftDeps = {};
+      craftParents = {};
+      craftLoaded = false;
     }
-
-    return false;
   }
 
-  function hasCraftRelation(a, b) {
-    if (!a || !b) return false;
-    return craftDependsOn(a.craft_key, b.craft_key) || craftDependsOn(b.craft_key, a.craft_key);
+  function getVehicleMap() {
+    const map = new Map();
+
+    vehicles.forEach((v) => {
+      map.set(vehicleKey(v), v);
+    });
+
+    return map;
   }
 
-  function createUnionFind(size) {
-    const parent = Array.from({ length: size }, (_, i) => i);
+  function buildFamilies() {
+    const vehicleMap = getVehicleMap();
+    const parent = new Map();
 
     function find(x) {
-      while (parent[x] !== x) {
-        parent[x] = parent[parent[x]];
-        x = parent[x];
-      }
-      return x;
+      if (!parent.has(x)) parent.set(x, x);
+      const p = parent.get(x);
+      if (p === x) return x;
+      const root = find(p);
+      parent.set(x, root);
+      return root;
     }
 
     function union(a, b) {
-      const pa = find(a);
-      const pb = find(b);
-      if (pa !== pb) parent[pb] = pa;
+      const ra = find(a);
+      const rb = find(b);
+      if (ra !== rb) parent.set(rb, ra);
     }
 
-    return { find, union };
-  }
-
-  function computeFamilies(vehicleRows) {
-    const list = vehicleRows
-      .map((v) => ({
-        ...v,
-        craft_key_norm: normKey(v.craft_key),
-        display_name: v.display_name || v.blueprint_name || v.craft_key,
-        blueprint_name: v.blueprint_name || "",
-        description: v.description || "",
-        price: Number(v.price || 0),
-        group_name: v.group_name || "Ohne Gruppe",
-        group_sort_order: Number(v.group_sort_order ?? 1000),
-        sort_order: Number(v.sort_order ?? 1000),
-        autoLevel: 0
-      }))
-      .filter((v) => v.craft_key_norm);
-
-    const uf = createUnionFind(list.length);
-
-    for (let i = 0; i < list.length; i++) {
-      for (let j = i + 1; j < list.length; j++) {
-        if (hasCraftRelation(list[i], list[j])) {
-          uf.union(i, j);
-        }
-      }
-    }
-
-    const byComponent = new Map();
-
-    list.forEach((v, index) => {
-      const root = uf.find(index);
-      if (!byComponent.has(root)) byComponent.set(root, []);
-      byComponent.get(root).push(v);
+    vehicles.forEach((v) => {
+      find(vehicleKey(v));
     });
 
-    const result = [];
-
-    for (const variants of byComponent.values()) {
-      computeFamilyGraph(variants);
-
-      let base = variants[0];
-
-      variants.forEach((v) => {
-        if ((v.autoLevel || 0) < (base.autoLevel || 0)) {
-          base = v;
-        } else if ((v.autoLevel || 0) === (base.autoLevel || 0)) {
-          if ((v.sort_order || 1000) < (base.sort_order || 1000)) base = v;
-          else if ((v.sort_order || 1000) === (base.sort_order || 1000)) {
-            if (String(v.display_name).localeCompare(String(base.display_name), "de") < 0) base = v;
-          }
+    Object.entries(craftDeps).forEach(([from, targets]) => {
+      targets.forEach((to) => {
+        if (vehicleMap.has(from) && vehicleMap.has(to)) {
+          union(from, to);
         }
       });
+    });
 
-      const fam = {
-        id: "fam_" + base.craft_key_norm,
+    const familiesByRoot = new Map();
+
+    vehicles.forEach((v) => {
+      const key = vehicleKey(v);
+      const root = find(key);
+
+      if (!familiesByRoot.has(root)) {
+        familiesByRoot.set(root, []);
+      }
+
+      familiesByRoot.get(root).push(v);
+    });
+
+    const families = Array.from(familiesByRoot.values()).map((list) => {
+      const sorted = sortFamilyVariants(list);
+      const base = getBaseVariant(sorted);
+
+      return {
         base,
-        variants,
-        group_name: base.group_name || "Ohne Gruppe",
-        group_sort_order: base.group_sort_order ?? 1000,
-        sort_order: base.sort_order ?? 1000,
-        byId: {},
-        parentById: {},
-        childrenMap: {}
+        variants: sorted
       };
+    });
 
-      variants.forEach((v) => {
-        fam.byId[v.id] = v;
-      });
+    families.sort((a, b) => {
+      const ga = a.base.group_sort_order ?? 1000;
+      const gb = b.base.group_sort_order ?? 1000;
+      const sa = a.base.sort_order ?? 1000;
+      const sb = b.base.sort_order ?? 1000;
 
-      buildFamilyParents(fam);
+      return (
+        ga - gb ||
+        sa - sb ||
+        String(a.base.group_name || "").localeCompare(String(b.base.group_name || ""), "de") ||
+        String(a.base.display_name || "").localeCompare(String(b.base.display_name || ""), "de")
+      );
+    });
 
-      result.push(fam);
+    return families;
+  }
+
+  function familyLevel(key, memo = {}) {
+    key = normKey(key);
+
+    if (memo[key] != null) return memo[key];
+
+    const parents = (craftParents[key] || []).filter((p) => {
+      return vehicles.some((v) => vehicleKey(v) === p);
+    });
+
+    if (!parents.length) {
+      memo[key] = 0;
+      return 0;
     }
 
-    result.sort((a, b) => {
+    memo[key] = 1 + Math.max(...parents.map((p) => familyLevel(p, memo)));
+    return memo[key];
+  }
+
+  function sortFamilyVariants(list) {
+    const memo = {};
+
+    return list.slice().sort((a, b) => {
+      const ka = vehicleKey(a);
+      const kb = vehicleKey(b);
+
       return (
-        (a.group_sort_order ?? 1000) - (b.group_sort_order ?? 1000) ||
+        familyLevel(ka, memo) - familyLevel(kb, memo) ||
         (a.sort_order ?? 1000) - (b.sort_order ?? 1000) ||
-        String(a.base.display_name).localeCompare(String(b.base.display_name), "de")
-      );
-    });
-
-    return result;
-  }
-
-  function computeFamilyGraph(variants) {
-    const levelMemo = {};
-
-    function levelOf(vehicle) {
-      if (levelMemo[vehicle.id] != null) return levelMemo[vehicle.id];
-
-      const parents = variants.filter((possibleParent) => {
-        if (possibleParent.id === vehicle.id) return false;
-        return craftDependsOn(vehicle.craft_key, possibleParent.craft_key);
-      });
-
-      if (!parents.length) {
-        levelMemo[vehicle.id] = 0;
-        return 0;
-      }
-
-      let maxParentLevel = 0;
-
-      parents.forEach((parent) => {
-        maxParentLevel = Math.max(maxParentLevel, levelOf(parent) + 1);
-      });
-
-      levelMemo[vehicle.id] = maxParentLevel;
-      return maxParentLevel;
-    }
-
-    variants.forEach((v) => {
-      v.autoLevel = levelOf(v);
-    });
-
-    variants.sort((a, b) => {
-      return (
-        (a.autoLevel || 0) - (b.autoLevel || 0) ||
-        (a.sort_order || 1000) - (b.sort_order || 1000) ||
-        String(a.display_name).localeCompare(String(b.display_name), "de")
+        String(a.display_name || "").localeCompare(String(b.display_name || ""), "de")
       );
     });
   }
 
-  function buildFamilyParents(fam) {
-    const variants = fam.variants || [];
-    const parentById = {};
-    const childrenMap = {};
+  function getBaseVariant(list) {
+    const keys = new Set(list.map(vehicleKey));
 
-    variants.forEach((v) => {
-      childrenMap[v.id] = [];
+    const withoutFamilyParents = list.filter((v) => {
+      const parents = craftParents[vehicleKey(v)] || [];
+      return !parents.some((p) => keys.has(p));
     });
 
-    variants.forEach((child) => {
-      if (child.id === fam.base.id) return;
-
-      const candidates = variants.filter((possibleParent) => {
-        if (possibleParent.id === child.id) return false;
-        if ((possibleParent.autoLevel || 0) >= (child.autoLevel || 0)) return false;
-        return craftDependsOn(child.craft_key, possibleParent.craft_key);
-      });
-
-      candidates.sort((a, b) => {
-        return (
-          (b.autoLevel || 0) - (a.autoLevel || 0) ||
-          (a.sort_order || 1000) - (b.sort_order || 1000) ||
-          String(a.display_name).localeCompare(String(b.display_name), "de")
-        );
-      });
-
-      if (candidates[0]) {
-        parentById[child.id] = candidates[0].id;
-        childrenMap[candidates[0].id].push(child.id);
-      }
-    });
-
-    fam.parentById = parentById;
-    fam.childrenMap = childrenMap;
+    return withoutFamilyParents[0] || list[0];
   }
 
-  function chainToBase(fam, nodeId) {
-    const chain = [];
-    let current = fam.byId[nodeId];
-    let safety = 0;
+  function upgradeLabel(base, variants) {
+    const upgrades = variants.filter((v) => v.id !== base.id);
 
-    while (current && safety < 100) {
-      chain.push(current);
-
-      if (current.id === fam.base.id) break;
-
-      const parentId = fam.parentById[current.id];
-      if (!parentId) break;
-
-      current = fam.byId[parentId];
-      safety++;
+    if (!upgrades.length) {
+      return "";
     }
 
-    return chain.reverse();
+    return upgrades.map((v) => v.display_name).join(", ");
   }
 
-  function chainLabel(chain) {
-    return chain.map((v) => v.display_name).join(" → ");
-  }
+  function getPathToVariant(targetKey) {
+    const vehicleMap = getVehicleMap();
+    const target = normKey(targetKey);
+    const path = [];
+    const seen = new Set();
 
-  function allUpgradeNames(fam) {
-    const upgrades = (fam.variants || [])
-      .filter((v) => v.id !== fam.base.id)
-      .sort((a, b) => {
-        return (
-          (a.autoLevel || 0) - (b.autoLevel || 0) ||
-          (a.sort_order || 1000) - (b.sort_order || 1000) ||
-          String(a.display_name).localeCompare(String(b.display_name), "de")
-        );
-      })
-      .map((v) => v.display_name);
+    function walk(key) {
+      if (!key || seen.has(key)) return;
+      seen.add(key);
 
-    return upgrades.length ? "→ " + upgrades.join(" → ") : "";
+      const parents = (craftParents[key] || []).filter((p) => vehicleMap.has(p));
+
+      if (parents.length) {
+        walk(parents[0]);
+      }
+
+      const v = vehicleMap.get(key);
+      if (v) path.push(v);
+    }
+
+    walk(target);
+    return path;
   }
 
   async function loadVehicles() {
     const status = $("shopStatus");
 
     try {
-      status.classList.remove("bt-error");
-      status.textContent = "🔄 Fahrzeugdaten und Upgrade-Pfade werden geladen …";
-
-      await ensureCraftLoaded();
+      if (status) status.textContent = "Lade Fahrzeugkatalog …";
 
       const { data, error } = await window.lfcSupabase
         .from("public_vehicle_catalog")
@@ -505,655 +422,480 @@
 
       if (error) throw error;
 
-      vehicles = (data || []).map((v) => ({
-        ...v,
-        images: Array.isArray(v.images) ? v.images : []
-      }));
+      vehicles = (data || [])
+        .filter((v) => v.group_name)
+        .sort((a, b) => {
+          return (
+            (a.group_sort_order ?? 1000) - (b.group_sort_order ?? 1000) ||
+            (a.sort_order ?? 1000) - (b.sort_order ?? 1000) ||
+            String(a.display_name || "").localeCompare(String(b.display_name || ""), "de")
+          );
+        });
 
-      families = computeFamilies(vehicles);
-
+      await loadCraftDependencies();
       render();
 
-      status.textContent =
-        "✅ " +
-        vehicles.length +
-        " Fahrzeuge in " +
-        families.length +
-        " Fahrzeugfamilien geladen.";
-    } catch (err) {
-      console.error(err);
-      status.classList.add("bt-error");
-      status.textContent =
-        "❌ Fahrzeugdaten konnten nicht geladen werden. Prüfe Supabase, public_vehicle_catalog und ob das Crafting-Sheet öffentlich lesbar ist.";
+      if (status) {
+        status.classList.remove("bt-error");
+        status.textContent = `✅ ${vehicles.length} Fahrzeuge geladen${craftLoaded ? " inkl. Upgrade-Struktur." : "."}`;
+      }
+    } catch (error) {
+      console.error(error);
+
+      if (status) {
+        status.classList.add("bt-error");
+        status.textContent =
+          "❌ Fahrzeugdaten konnten nicht geladen werden. Prüfe assets/js/config.js und die Supabase-View public_vehicle_catalog.";
+      }
     }
   }
 
-  function renderGroupNav(groupNames) {
+  function renderGroupNav(names) {
     const nav = $("shopGroupNav");
+    if (!nav) return;
+
     nav.innerHTML = "";
 
-    groupNames.forEach((name) => {
-      const btn = document.createElement("button");
-      btn.className = "shop-group-nav-item";
-      btn.type = "button";
-      btn.textContent = name;
+    names.forEach((name) => {
+      const b = document.createElement("button");
+      b.className = "shop-group-nav-item";
+      b.type = "button";
+      b.textContent = name;
 
-      btn.addEventListener("click", () => {
-        const target = document.getElementById(groupDomId(name));
-        if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
-      });
+      b.onclick = () => {
+        const target = document.getElementById("group-" + slug(name));
+        if (target) {
+          target.scrollIntoView({
+            behavior: "smooth",
+            block: "start"
+          });
+        }
+      };
 
-      nav.appendChild(btn);
+      nav.appendChild(b);
     });
   }
 
   function render() {
     const content = $("shopContent");
+    if (!content) return;
+
     content.innerHTML = "";
-
     cards = [];
-    groupSections = [];
+    groups = [];
 
+    const families = buildFamilies();
     const byGroup = new Map();
 
-    families.forEach((fam) => {
-      const group = fam.group_name || "Ohne Gruppe";
-      if (!byGroup.has(group)) byGroup.set(group, []);
-      byGroup.get(group).push(fam);
+    families.forEach((family) => {
+      const g = groupKey(family.base);
+      if (!byGroup.has(g)) byGroup.set(g, []);
+      byGroup.get(g).push(family);
     });
 
-    const groupNames = Array.from(byGroup.keys());
-    renderGroupNav(groupNames);
+    renderGroupNav(Array.from(byGroup.keys()));
 
-    for (const [groupName, familyList] of byGroup.entries()) {
+    for (const [name, list] of byGroup) {
       const section = document.createElement("section");
       section.className = "shop-group";
-      section.id = groupDomId(groupName);
+      section.id = "group-" + slug(name);
 
-      section.innerHTML =
-        '<div class="shop-group-title">' +
-        "<h2>" +
-        escHtml(groupName) +
-        "</h2>" +
-        '<span class="shop-group-count">' +
-        familyList.length +
-        " Fahrzeuge</span>" +
-        "</div>" +
-        '<div class="shop-grid"></div>';
+      section.innerHTML = `
+        <div class="shop-group-title">
+          <h2>${escHtml(name)}</h2>
+          <span class="shop-group-count">${list.length} Fahrzeuge</span>
+        </div>
+        <div class="shop-grid"></div>
+      `;
 
       const grid = section.querySelector(".shop-grid");
 
-      familyList.forEach((fam) => {
-        const base = fam.base;
-        const image = firstVehicleImage(base);
-        const upgrades = allUpgradeNames(fam);
+      list.forEach((family) => {
+        const v = family.base;
+        const img = firstImg(v);
+        const upgrades = upgradeLabel(v, family.variants);
 
         const card = document.createElement("article");
         card.className = "shop-card";
-
-        const searchText = [
-          base.display_name,
-          base.blueprint_name,
-          base.description,
-          groupName,
-          base.craft_key,
+        card.dataset.search = norm([
+          v.display_name,
+          v.blueprint_name,
+          v.description,
+          v.group_name,
+          v.craft_key,
           upgrades,
-          fam.variants.map((v) => [v.display_name, v.blueprint_name, v.description, v.craft_key].join(" ")).join(" ")
-        ].join(" ");
+          family.variants.map((x) => x.display_name).join(" ")
+        ].join(" "));
 
-        card.dataset.search = normText(searchText);
+        card.innerHTML = `
+          <div class="shop-card-media">
+            ${
+              img
+                ? `<img src="${escHtml(img)}" alt="${escHtml(v.display_name)}" loading="lazy">`
+                : `<div class="shop-modal-img-placeholder">Kein Bild vorhanden</div>`
+            }
+          </div>
 
-        card.innerHTML =
-          '<div class="shop-card-media">' +
-          (image
-            ? '<img src="' + escHtml(image) + '" alt="' + escHtml(base.display_name) + '" loading="lazy">'
-            : '<div class="shop-modal-img-placeholder">Kein Bild vorhanden</div>') +
-          "</div>" +
-          '<div class="shop-card-body">' +
-          "<div>" +
-          '<h3 class="shop-card-title">' +
-          escHtml(base.display_name) +
-          "</h3>" +
-          '<div class="shop-card-upgrades">' +
-          (upgrades
-            ? "<strong>Upgrades:</strong><span>" + escHtml(upgrades) + "</span>"
-            : "<span>" + escHtml((base.description || "").slice(0, 120)) + ((base.description || "").length > 120 ? "…" : "") + "</span>") +
-          "</div>" +
-          "</div>" +
-          '<p class="shop-card-price-main">' +
-          escHtml(euro(base.price)) +
-          "</p>" +
-          "</div>";
+          <div class="shop-card-body">
+            <div>
+              <h3 class="shop-card-title">${escHtml(v.display_name)}</h3>
+              ${
+                upgrades
+                  ? `<div class="shop-card-upgrades"><strong>Upgrades:</strong> ${escHtml(upgrades)}</div>`
+                  : `<div class="shop-card-upgrades">${escHtml(v.description || "").slice(0, 120)}${(v.description || "").length > 120 ? "…" : ""}</div>`
+              }
+            </div>
 
-        card.addEventListener("click", () => openModalForFamily(fam));
+            <p class="shop-card-price-main">${euro(v.price)}</p>
+          </div>
+        `;
+
+        card.onclick = () => openModal(family);
 
         grid.appendChild(card);
         cards.push(card);
       });
 
       content.appendChild(section);
-      groupSections.push(section);
+      groups.push(section);
     }
 
     const info = $("shopSearchInfo");
-    if (info) info.textContent = families.length + " Einträge";
+    if (info) info.textContent = `${families.length} Einträge`;
   }
 
-  function filterCatalog() {
-    const query = normText($("shopSearch").value);
+  function filter() {
+    const q = norm($("shopSearch")?.value || "");
     let shown = 0;
 
-    cards.forEach((card) => {
-      const ok = !query || String(card.dataset.search || "").includes(query);
-      card.style.display = ok ? "" : "none";
+    cards.forEach((c) => {
+      const ok = !q || c.dataset.search.includes(q);
+      c.style.display = ok ? "" : "none";
       if (ok) shown++;
     });
 
-    groupSections.forEach((group) => {
-      const anyVisible = Array.from(group.querySelectorAll(".shop-card")).some((card) => {
-        return card.style.display !== "none";
-      });
-
-      group.style.display = anyVisible ? "" : "none";
+    groups.forEach((g) => {
+      const any = Array.from(g.querySelectorAll(".shop-card")).some((c) => c.style.display !== "none");
+      g.style.display = any ? "" : "none";
     });
 
-    $("shopNoResults").style.display = shown ? "none" : "block";
+    const noResults = $("shopNoResults");
+    if (noResults) noResults.style.display = shown ? "none" : "block";
 
     const info = $("shopSearchInfo");
-    if (info) info.textContent = shown + " Treffer";
+    if (info) info.textContent = `${shown} Treffer`;
   }
 
-  function getNodeImages(node) {
-    let images = getVehicleImages(node);
-
-    if (!images.length && node.craft_key) {
-      const info = recipeInfo[normKey(node.craft_key)];
-      if (info && info.picture) images = pickPictureUrls(info.picture);
-    }
-
-    return images;
-  }
-
-  function openModalForFamily(fam) {
-    currentFamily = fam;
-
+  function openModal(family) {
     const modal = $("shopModal");
-    const content = $("shopModalContent");
+    if (!modal) return;
+
+    const base = family.base;
+    const variants = family.variants || [base];
+
+    activeSelection = base;
+
+    $("shopModalTitle").textContent = base.display_name;
+    renderModalVariant(family, base);
 
     modal.classList.add("active");
     modal.setAttribute("aria-hidden", "false");
-
-    const tabNodes = (fam.variants || []).slice().sort((a, b) => {
-      return (
-        (a.autoLevel || 0) - (b.autoLevel || 0) ||
-        (a.sort_order || 1000) - (b.sort_order || 1000) ||
-        String(a.display_name).localeCompare(String(b.display_name), "de")
-      );
-    });
-
-    if (!tabNodes.length) {
-      $("shopModalTitle").textContent = "Fahrzeug";
-      content.innerHTML = '<div class="bt-hint bt-error">⚠️ Keine Varianten gefunden.</div>';
-      return;
-    }
-
-    let html = "";
-
-    html += '<div class="shop-tabs">';
-    html += '<div class="shop-tab-buttons">';
-
-    tabNodes.forEach((node, index) => {
-      const tabId = "tab_" + node.id;
-      html +=
-        '<button type="button" class="shop-tab-button' +
-        (index === 0 ? " active" : "") +
-        '" data-tab="' +
-        escHtml(tabId) +
-        '">' +
-        escHtml(node.display_name) +
-        "</button>";
-    });
-
-    html += "</div>";
-    html += '<div class="shop-tab-panels">';
-
-    tabNodes.forEach((node, index) => {
-      const tabId = "tab_" + node.id;
-      const chain = chainToBase(fam, node.id);
-      const imgs = getNodeImages(node);
-      const chainCompact = chain.map((n) => ({
-        id: n.id,
-        craft_key: n.craft_key,
-        name: n.display_name,
-        price: Number(n.price || 0)
-      }));
-
-      html +=
-        '<div class="shop-tab-panel' +
-        (index === 0 ? " active" : "") +
-        '" data-tab="' +
-        escHtml(tabId) +
-        '" data-title="' +
-        escHtml(node.display_name) +
-        '" data-chain="' +
-        escHtml(JSON.stringify(chainCompact)) +
-        '">';
-
-      html += '<h3 class="shop-tab-title">' + escHtml(node.display_name) + "</h3>";
-
-      if (node.blueprint_name) {
-        html +=
-          '<div class="shop-path"><strong>Bauplan:</strong> ' +
-          escHtml(stripBauplan(node.blueprint_name)) +
-          "</div>";
-      }
-
-      html +=
-        '<div class="shop-path shop-path-main"><strong>Pfad:</strong> ' +
-        escHtml(chainLabel(chain)) +
-        "</div>";
-
-      html += '<div class="shop-modal-media">';
-      html += '<div class="shop-modal-img-box">';
-
-      if (imgs.length) {
-        html +=
-          '<img class="shop-modal-img" src="' +
-          escHtml(imgs[0]) +
-          '" alt="" data-imgs="' +
-          escHtml(JSON.stringify(imgs)) +
-          '" data-full="' +
-          escHtml(imgs[0]) +
-          '">';
-      } else {
-        html += '<div class="shop-modal-img-placeholder">Kein Bild vorhanden.</div>';
-      }
-
-      html += "</div>";
-
-      if (imgs.length > 1) {
-        html += '<div class="shop-modal-img-switch">';
-        imgs.forEach((_, i) => {
-          html +=
-            '<button class="shop-modal-img-btn' +
-            (i === 0 ? " active" : "") +
-            '" type="button" data-idx="' +
-            i +
-            '"></button>';
-        });
-        html += "</div>";
-      }
-
-      html += "</div>";
-
-      if (node.description) {
-        html += '<div class="shop-tab-desc">' + escHtml(node.description) + "</div>";
-      }
-
-      if (node.trunk_size) {
-        html +=
-          '<div class="shop-lkw-kofferraum"><strong>Kofferraum:</strong> ' +
-          escHtml(node.trunk_size) +
-          "</div>";
-      }
-
-      html += '<div class="shop-price-row">';
-      html += '<div class="shop-price-box">';
-      html += '<div class="shop-price-label">Preis</div>';
-      html += '<div class="shop-price-main">' + escHtml(euro(node.price)) + "</div>";
-      html += "</div>";
-      html += '<button type="button" class="shop-request-btn">Anfrage</button>';
-      html += "</div>";
-
-      html += "</div>";
-    });
-
-    html += "</div>";
-    html += "</div>";
-
-    content.innerHTML = html;
-
-    bindModalTabs();
-
-    const firstTab = content.querySelector(".shop-tab-button");
-    if (firstTab) activateTab(firstTab.getAttribute("data-tab"));
   }
 
-  function bindModalTabs() {
-    const content = $("shopModalContent");
+  function renderModalVariant(family, selected) {
+    activeSelection = selected;
 
-    content.querySelectorAll(".shop-tab-button").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        activateTab(btn.getAttribute("data-tab"));
-      });
-    });
-  }
+    const modalContent = $("shopModalContent");
+    if (!modalContent) return;
 
-  function activateTab(tabId) {
-    const content = $("shopModalContent");
+    const variants = family.variants || [selected];
+    const allImgs = imgs(selected);
+    const path = getPathToVariant(vehicleKey(selected));
 
-    content.querySelectorAll(".shop-tab-button").forEach((btn) => {
-      btn.classList.toggle("active", btn.getAttribute("data-tab") === tabId);
-    });
-
-    content.querySelectorAll(".shop-tab-panel").forEach((panel) => {
-      panel.classList.toggle("active", panel.getAttribute("data-tab") === tabId);
-    });
-
-    const panel = content.querySelector('.shop-tab-panel[data-tab="' + CSS.escape(tabId) + '"]');
-    if (!panel) return;
-
-    const title = panel.getAttribute("data-title") || "Fahrzeug";
-    $("shopModalTitle").textContent = title;
-
-    const img = panel.querySelector(".shop-modal-img");
-    const imgButtons = panel.querySelectorAll(".shop-modal-img-btn");
-
-    if (img) {
-      let imgs = [];
-
-      try {
-        imgs = JSON.parse(img.getAttribute("data-imgs") || "[]");
-      } catch (e) {
-        imgs = [];
+    modalContent.innerHTML = `
+      ${
+        variants.length > 1
+          ? `
+            <div class="shop-modal-variant-tabs">
+              ${variants.map((v) => `
+                <button
+                  class="shop-modal-variant-tab ${v.id === selected.id ? "active" : ""}"
+                  type="button"
+                  data-id="${escHtml(v.id)}"
+                >
+                  ${escHtml(v.display_name)}
+                </button>
+              `).join("")}
+            </div>
+          `
+          : ""
       }
 
-      function setImage(index) {
-        if (!imgs.length) return;
+      <h3 class="shop-tab-title">${escHtml(selected.display_name)}</h3>
 
-        const safeIndex = Math.max(0, Math.min(imgs.length - 1, index));
-        img.src = imgs[safeIndex];
-        img.setAttribute("data-full", imgs[safeIndex]);
-
-        imgButtons.forEach((b) => {
-          b.classList.toggle("active", Number(b.getAttribute("data-idx")) === safeIndex);
-        });
+      ${
+        selected.blueprint_name
+          ? `<div class="shop-path"><strong>Bauplan:</strong> ${escHtml(selected.blueprint_name)}</div>`
+          : ""
       }
 
-      imgButtons.forEach((btn) => {
-        btn.addEventListener("click", (ev) => {
-          ev.preventDefault();
-          ev.stopPropagation();
-          setImage(Number(btn.getAttribute("data-idx")) || 0);
-        });
-      });
+      ${
+        path.length > 1
+          ? `<div class="shop-path"><strong>Upgrade-Pfad:</strong> ${path.map((v) => escHtml(v.display_name)).join(" → ")}</div>`
+          : ""
+      }
 
-      img.addEventListener("click", () => {
-        openLightbox(img.getAttribute("data-full") || img.src);
-      });
-    }
+      <div class="shop-modal-media">
+        <div class="shop-modal-img-box">
+          ${
+            allImgs[0]
+              ? `<img id="modalVehicleImg" class="shop-modal-img" src="${escHtml(allImgs[0])}" alt="${escHtml(selected.display_name)}">`
+              : `<div class="shop-modal-img-placeholder">Kein Bild vorhanden.</div>`
+          }
+        </div>
 
-    const requestBtn = panel.querySelector(".shop-request-btn");
-
-    if (requestBtn) {
-      requestBtn.addEventListener("click", () => {
-        let chain = [];
-
-        try {
-          chain = JSON.parse(panel.getAttribute("data-chain") || "[]");
-        } catch (e) {
-          chain = [];
+        ${
+          allImgs.length > 1
+            ? `
+              <div class="shop-modal-img-switch">
+                ${allImgs.map((_, i) => `
+                  <button class="shop-modal-img-btn ${i === 0 ? "active" : ""}" type="button" data-idx="${i}"></button>
+                `).join("")}
+              </div>
+            `
+            : ""
         }
+      </div>
 
-        openRequestModal({
-          vehicleTitle: title,
-          chain,
-          mode: "total"
+      ${
+        selected.description
+          ? `<div class="shop-tab-desc">${escHtml(selected.description)}</div>`
+          : ""
+      }
+
+      ${
+        selected.trunk_size
+          ? `<div class="shop-lkw-kofferraum"><strong>Kofferraum:</strong> ${escHtml(selected.trunk_size)}</div>`
+          : ""
+      }
+
+      <div class="shop-price-row">
+        <div class="shop-price-box">
+          <div class="shop-price-label">Preis</div>
+          <div class="shop-price-main">${euro(selected.price)}</div>
+        </div>
+
+        <button type="button" class="shop-request-btn" id="openRequestBtn">
+          Anfrage
+        </button>
+      </div>
+    `;
+
+    document.querySelectorAll(".shop-modal-variant-tab").forEach((btn) => {
+      btn.onclick = () => {
+        const next = variants.find((v) => String(v.id) === String(btn.dataset.id));
+        if (next) renderModalVariant(family, next);
+      };
+    });
+
+    const imgEl = $("modalVehicleImg");
+    if (imgEl) {
+      imgEl.onclick = () => openLightbox(imgEl.src);
+    }
+
+    document.querySelectorAll(".shop-modal-img-btn").forEach((btn) => {
+      btn.onclick = () => {
+        const i = Number(btn.dataset.idx);
+        const img = $("modalVehicleImg");
+        if (!img) return;
+
+        img.src = allImgs[i];
+
+        document.querySelectorAll(".shop-modal-img-btn").forEach((b) => {
+          b.classList.toggle("active", b === btn);
         });
-      });
+      };
+    });
+
+    const openRequestBtn = $("openRequestBtn");
+    if (openRequestBtn) {
+      openRequestBtn.onclick = () => openRequest(selected);
     }
   }
 
   function closeModal() {
     const modal = $("shopModal");
+    if (!modal) return;
+
     modal.classList.remove("active");
     modal.setAttribute("aria-hidden", "true");
-    $("shopModalContent").innerHTML = "";
-    currentFamily = null;
   }
 
   function openLightbox(src) {
-    if (!src) return;
-    $("imageLightboxImg").src = src;
-    $("imageLightbox").classList.add("active");
-    $("imageLightbox").setAttribute("aria-hidden", "false");
+    const box = $("imageLightbox");
+    const img = $("imageLightboxImg");
+
+    if (!box || !img) return;
+
+    img.src = src;
+    box.classList.add("active");
+    box.setAttribute("aria-hidden", "false");
   }
 
   function closeLightbox() {
-    $("imageLightbox").classList.remove("active");
-    $("imageLightbox").setAttribute("aria-hidden", "true");
-    $("imageLightboxImg").src = "";
+    const box = $("imageLightbox");
+    const img = $("imageLightboxImg");
+
+    if (!box || !img) return;
+
+    box.classList.remove("active");
+    box.setAttribute("aria-hidden", "true");
+    img.src = "";
   }
 
-  function ensureRequestModeUi() {
-    const form = $("requestForm");
-    let wrap = $("requestModeWrap");
+  function openRequest(v) {
+    activeSelection = v;
 
-    if (wrap) return wrap;
-
-    wrap = document.createElement("div");
-    wrap.id = "requestModeWrap";
-    wrap.className = "shop-field";
-    wrap.innerHTML =
-      '<label for="reqMode">Upgrade-Auswahl</label>' +
-      '<select id="reqMode"></select>';
+    const modal = $("requestModal");
+    if (!modal) return;
 
     const summary = $("requestSummary");
-    summary.insertAdjacentElement("afterend", wrap);
 
-    wrap.querySelector("select").addEventListener("change", () => {
-      if (!activeRequest) return;
-      activeRequest.mode = $("reqMode").value || "total";
-      renderRequestSummary();
-    });
-
-    form._requestModeWrap = wrap;
-    return wrap;
-  }
-
-  function idxByIdInChain(chain, id) {
-    return chain.findIndex((x) => x.id === id);
-  }
-
-  function sumFromExclusiveChain(chain, fromIdx) {
-    let total = 0;
-
-    for (let i = fromIdx + 1; i < chain.length; i++) {
-      total += Number(chain[i].price || 0);
+    if (summary) {
+      summary.innerHTML = `
+        <strong>Fahrzeug:</strong> ${escHtml(v.display_name)}<br>
+        <strong>Craft-Key:</strong> ${escHtml(v.craft_key || "-")}<br>
+        <strong>Preis:</strong> ${euro(v.price)}
+      `;
     }
 
-    return total;
-  }
-
-  function calcRequestSelection(chain, mode) {
-    if (!Array.isArray(chain) || !chain.length) {
-      return {
-        fromName: "",
-        toName: "",
-        segmentPrice: 0,
-        path: ""
-      };
+    const status = $("requestStatus");
+    if (status) {
+      status.className = "shop-form-status";
+      status.textContent = "";
     }
 
-    let fromIdx = 0;
-    const toIdx = chain.length - 1;
-
-    if (mode === "prev") {
-      fromIdx = Math.max(0, chain.length - 2);
-    } else if (mode && mode.indexOf("from:") === 0) {
-      const id = mode.slice(5);
-      const idx = idxByIdInChain(chain, id);
-      if (idx >= 0 && idx < chain.length - 1) fromIdx = idx;
-    }
-
-    const fromName = chain[fromIdx] ? chain[fromIdx].name : "";
-    const toName = chain[toIdx] ? chain[toIdx].name : "";
-
-    return {
-      fromName,
-      toName,
-      segmentPrice: sumFromExclusiveChain(chain, fromIdx),
-      path: (fromName || "—") + " → " + (toName || "—")
-    };
+    modal.classList.add("active");
+    modal.setAttribute("aria-hidden", "false");
   }
 
-  function openRequestModal(ctx) {
-    activeRequest = ctx || null;
+  function closeRequest() {
+    const modal = $("requestModal");
+    if (!modal) return;
 
-    const chain = activeRequest && Array.isArray(activeRequest.chain) ? activeRequest.chain : [];
-    const modeWrap = ensureRequestModeUi();
-    const select = $("reqMode");
-
-    select.innerHTML = "";
-
-    if (chain.length >= 2) {
-      modeWrap.style.display = "";
-
-      const totalOption = document.createElement("option");
-      totalOption.value = "total";
-      totalOption.textContent = "Basis → aktuelles Modell";
-      select.appendChild(totalOption);
-
-      const prevOption = document.createElement("option");
-      prevOption.value = "prev";
-      prevOption.textContent = "Nur letztes Upgrade";
-      select.appendChild(prevOption);
-
-      for (let i = 0; i < chain.length - 1; i++) {
-        const opt = document.createElement("option");
-        opt.value = "from:" + chain[i].id;
-        opt.textContent = "Upgrade ab: " + chain[i].name;
-        select.appendChild(opt);
-      }
-
-      select.value = activeRequest.mode || "total";
-    } else {
-      modeWrap.style.display = "none";
-    }
-
-    $("requestStatus").className = "shop-form-status";
-    $("requestStatus").textContent = "";
-
-    renderRequestSummary();
-
-    $("requestModal").classList.add("active");
-    $("requestModal").setAttribute("aria-hidden", "false");
-
-    setTimeout(() => {
-      try {
-        $("reqName").focus();
-      } catch (e) {}
-    }, 50);
-  }
-
-  function renderRequestSummary() {
-    if (!activeRequest) return;
-
-    const chain = activeRequest.chain || [];
-    const mode = activeRequest.mode || "total";
-    const selection = calcRequestSelection(chain, mode);
-
-    $("requestSummary").innerHTML =
-      "<strong>Übersicht:</strong><br>" +
-      "Fahrzeug: <strong>" +
-      escHtml(activeRequest.vehicleTitle || "Fahrzeug") +
-      "</strong><br>" +
-      "Pfad: <strong>" +
-      escHtml(selection.path || activeRequest.vehicleTitle || "—") +
-      "</strong><br>" +
-      "Preis Auswahl: <strong>" +
-      escHtml(euro(selection.segmentPrice || 0)) +
-      "</strong>";
-  }
-
-  function closeRequestModal() {
-    $("requestModal").classList.remove("active");
-    $("requestModal").setAttribute("aria-hidden", "true");
-    activeRequest = null;
+    modal.classList.remove("active");
+    modal.setAttribute("aria-hidden", "true");
   }
 
   async function submitRequest(ev) {
     ev.preventDefault();
 
-    const name = $("reqName").value.trim();
-    const contact = $("reqKontakt").value.trim();
-    const note = $("reqNote").value.trim();
+    const name = $("reqName")?.value.trim() || "";
+    const contact = $("reqKontakt")?.value.trim() || "";
+    const note = $("reqNote")?.value.trim() || "";
     const status = $("requestStatus");
     const send = $("requestSend");
 
-    if (!name || !contact || !activeRequest) {
-      status.className = "shop-form-status err";
-      status.textContent = "Bitte Name und Kontakt ausfüllen.";
+    if (!name || !contact || !activeSelection) {
+      if (status) {
+        status.className = "shop-form-status err";
+        status.textContent = "Bitte Name und Kontakt ausfüllen.";
+      }
       return;
     }
 
-    const chain = activeRequest.chain || [];
-    const mode = activeRequest.mode || "total";
-    const selection = calcRequestSelection(chain, mode);
+    if (send) {
+      send.disabled = true;
+      send.textContent = "Sende…";
+    }
 
-    send.disabled = true;
-    send.textContent = "Sende…";
-    status.className = "shop-form-status";
-    status.textContent = "";
+    if (status) {
+      status.className = "shop-form-status";
+      status.textContent = "";
+    }
 
     try {
       const message = [
-        "Fahrzeug: " + (activeRequest.vehicleTitle || "-"),
-        "Pfad: " + (selection.path || "-"),
-        "Preis Auswahl: " + euro(selection.segmentPrice || 0),
-        "Kontakt: " + contact,
-        note ? "Notiz: " + note : ""
-      ]
-        .filter(Boolean)
-        .join("\n");
+        `Fahrzeug: ${activeSelection.display_name}`,
+        `Craft-Key: ${activeSelection.craft_key || "-"}`,
+        `Preis: ${euro(activeSelection.price)}`,
+        `Kontakt: ${contact}`,
+        note ? `Notiz: ${note}` : ""
+      ].filter(Boolean).join("\n");
 
-      const { error } = await window.lfcSupabase.from("contact_requests").insert({
-        name,
-        subject: "Fahrzeug-Anfrage: " + (activeRequest.vehicleTitle || "Fahrzeug"),
-        message
-      });
+      const { error } = await window.lfcSupabase
+        .from("contact_requests")
+        .insert({
+          name,
+          subject: "Fahrzeug-Anfrage: " + activeSelection.display_name,
+          message
+        });
 
       if (error) throw error;
 
-      status.className = "shop-form-status ok";
-      status.textContent = "✅ Anfrage gesendet.";
-      $("requestForm").reset();
+      await triggerDiscordNotify();
 
-      setTimeout(closeRequestModal, 1100);
-    } catch (err) {
-      console.error(err);
-      status.className = "shop-form-status err";
-      status.textContent =
-        "❌ Anfrage konnte nicht gespeichert werden. Prüfe Supabase anon key und RLS-Policy.";
+      if (status) {
+        status.className = "shop-form-status ok";
+        status.textContent = "✅ Anfrage gesendet.";
+      }
+
+      const form = $("requestForm");
+      if (form) form.reset();
+
+      setTimeout(closeRequest, 1300);
+    } catch (error) {
+      console.error(error);
+
+      if (status) {
+        status.className = "shop-form-status err";
+        status.textContent =
+          "❌ Anfrage konnte nicht gespeichert oder an Discord weitergegeben werden.";
+      }
     } finally {
-      send.disabled = false;
-      send.textContent = "Anfrage senden";
+      if (send) {
+        send.disabled = false;
+        send.textContent = "Anfrage senden";
+      }
     }
   }
 
-  document.addEventListener("DOMContentLoaded", () => {
-    $("shopSearch").addEventListener("input", filterCatalog);
+  function bindEvents() {
+    const search = $("shopSearch");
+    if (search) search.addEventListener("input", filter);
 
-    $("shopModalClose").addEventListener("click", closeModal);
-    document.querySelector("#shopModal .shop-modal-backdrop").addEventListener("click", closeModal);
+    const modalClose = $("shopModalClose");
+    if (modalClose) modalClose.onclick = closeModal;
 
-    $("requestModalClose").addEventListener("click", closeRequestModal);
-    $("requestCancel").addEventListener("click", closeRequestModal);
-    document.querySelector("#requestModal .shop-modal-backdrop").addEventListener("click", closeRequestModal);
+    const modalBackdrop = document.querySelector("#shopModal .shop-modal-backdrop");
+    if (modalBackdrop) modalBackdrop.onclick = closeModal;
 
-    $("imageLightbox")
-      .querySelector(".shop-img-lightbox-backdrop")
-      .addEventListener("click", closeLightbox);
+    const requestClose = $("requestModalClose");
+    if (requestClose) requestClose.onclick = closeRequest;
 
-    $("requestForm").addEventListener("submit", submitRequest);
+    const requestCancel = $("requestCancel");
+    if (requestCancel) requestCancel.onclick = closeRequest;
 
-    document.addEventListener("keydown", (ev) => {
-      if (ev.key !== "Escape") return;
-      closeModal();
-      closeRequestModal();
-      closeLightbox();
+    const requestBackdrop = document.querySelector("#requestModal .shop-modal-backdrop");
+    if (requestBackdrop) requestBackdrop.onclick = closeRequest;
+
+    const lightboxBackdrop = document.querySelector("#imageLightbox .shop-img-lightbox-backdrop");
+    if (lightboxBackdrop) lightboxBackdrop.onclick = closeLightbox;
+
+    const requestForm = $("requestForm");
+    if (requestForm) requestForm.addEventListener("submit", submitRequest);
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        closeModal();
+        closeRequest();
+        closeLightbox();
+      }
     });
+  }
 
+  document.addEventListener("DOMContentLoaded", () => {
+    bindEvents();
     loadVehicles();
   });
 })();
