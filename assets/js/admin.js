@@ -1,6 +1,7 @@
 let currentTab = "vehicles";
 let vehicleGroupsCache = [];
 let orderProductsCache = [];
+let orderUpgradeCache = [];
 let currentUserRole = null;
 
 const FINISHED_STATUSES = ["completed", "cancelled", "rejected"];
@@ -78,8 +79,11 @@ function setAdminStatus(message, type = "") {
 
 function formatDate(value) {
   if (!value) return "";
-  try { return new Date(value).toLocaleString("de-DE"); }
-  catch { return String(value); }
+  try {
+    return new Date(value).toLocaleString("de-DE");
+  } catch {
+    return String(value);
+  }
 }
 
 function formatDateInput(value) {
@@ -236,6 +240,20 @@ function generateOrderNumber() {
   return "LFC-" + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + "-" + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
 }
 
+async function triggerDiscordNotify() {
+  try {
+    await fetch(`${window.LFC_SUPABASE_CONFIG.url}/functions/v1/discord-notify`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ mode: "queue" })
+    });
+  } catch (error) {
+    console.warn("Discord Notify konnte nicht ausgelöst werden:", error);
+  }
+}
+
 async function loadVehicleGroups() {
   const { data, error } = await window.lfcSupabase
     .from("vehicle_groups")
@@ -255,7 +273,18 @@ async function loadOrderProducts() {
 
   if (error) throw error;
 
-  orderProductsCache = (data || []).filter((x) => x.group_id);
+  const all = (data || []).filter((x) => x.group_id);
+
+  orderProductsCache = all.filter((x) => {
+    const name = String(x.display_name || "").toLowerCase();
+    return !name.includes("upgrade") && !name.includes("→") && !name.includes(" zu ");
+  });
+
+  orderUpgradeCache = all.filter((x) => !orderProductsCache.includes(x));
+
+  if (!orderUpgradeCache.length) {
+    orderUpgradeCache = all;
+  }
 }
 
 async function loadDefaultDepositPercent() {
@@ -529,13 +558,6 @@ async function loadNewOrder() {
   try {
     await loadOrderProducts();
 
-    const productOptions = orderProductsCache
-      .map((p) => {
-        const label = `${p.display_name} (${p.craft_key})`;
-        return `<option value="${escHtml(label)}"></option>`;
-      })
-      .join("");
-
     c.innerHTML = `
       <section class="bt-card order-create-card">
         <h2>Neuen Auftrag erstellen</h2>
@@ -548,10 +570,18 @@ async function loadNewOrder() {
             </div>
 
             <div class="shop-field">
+              <label>Auftragsart</label>
+              <select class="input" id="newOrderType">
+                <option value="new">Neuwagen</option>
+                <option value="upgrade">Upgrade</option>
+              </select>
+            </div>
+
+            <div class="shop-field">
               <label for="newOrderProductSearch">Was wird hergestellt? *</label>
-              <input class="input" id="newOrderProductSearch" list="orderProductList" required placeholder="Fahrzeug oder Upgrade suchen…">
-              <datalist id="orderProductList">${productOptions}</datalist>
-              <div class="small" id="newOrderProductInfo">Bitte Fahrzeug oder Upgrade auswählen.</div>
+              <input class="input" id="newOrderProductSearch" list="orderProductList" required placeholder="Auswahl suchen…">
+              <datalist id="orderProductList"></datalist>
+              <div class="small" id="newOrderProductInfo">Bitte Auswahl treffen.</div>
             </div>
           </div>
 
@@ -560,7 +590,7 @@ async function loadNewOrder() {
             <textarea class="input" id="newOrderPublicInfo" placeholder="Zusätzliche Infos für die öffentliche Bestellübersicht"></textarea>
           </div>
 
-          <div class="bt-hint" id="newOrderSummary">Noch kein Fahrzeug ausgewählt.</div>
+          <div class="bt-hint" id="newOrderSummary">Noch keine Auswahl getroffen.</div>
 
           <div class="shop-form-actions">
             <button class="btn" id="newOrderSubmit" type="submit">Auftrag erstellen</button>
@@ -569,20 +599,42 @@ async function loadNewOrder() {
       </section>
     `;
 
+    document.getElementById("newOrderType").addEventListener("change", refreshNewOrderOptions);
     document.getElementById("newOrderProductSearch").addEventListener("input", updateNewOrderSummary);
     document.getElementById("newOrderForm").addEventListener("submit", submitNewOrder);
+
+    refreshNewOrderOptions();
   } catch (error) {
     console.error(error);
     c.textContent = "Fehler: " + (error.message || String(error));
   }
 }
 
+function currentNewOrderList() {
+  const type = document.getElementById("newOrderType")?.value || "new";
+  return type === "upgrade" ? orderUpgradeCache : orderProductsCache;
+}
+
+function refreshNewOrderOptions() {
+  const list = currentNewOrderList();
+  const datalist = document.getElementById("orderProductList");
+  const search = document.getElementById("newOrderProductSearch");
+
+  if (search) search.value = "";
+
+  datalist.innerHTML = list.map((p) => {
+    const label = `${p.display_name} (${p.craft_key})`;
+    return `<option value="${escHtml(label)}"></option>`;
+  }).join("");
+
+  updateNewOrderSummary();
+}
+
 function findSelectedOrderProduct() {
   const value = String(document.getElementById("newOrderProductSearch")?.value || "").trim();
-
   if (!value) return null;
 
-  return orderProductsCache.find((p) => {
+  return currentNewOrderList().find((p) => {
     const label = `${p.display_name} (${p.craft_key})`;
     return label === value || p.display_name === value || p.craft_key === value;
   }) || null;
@@ -592,10 +644,11 @@ async function updateNewOrderSummary() {
   const product = findSelectedOrderProduct();
   const info = document.getElementById("newOrderProductInfo");
   const summary = document.getElementById("newOrderSummary");
+  const type = document.getElementById("newOrderType")?.value || "new";
 
   if (!product) {
-    info.textContent = "Kein gültiges Fahrzeug ausgewählt.";
-    summary.textContent = "Noch kein Fahrzeug ausgewählt.";
+    info.textContent = type === "upgrade" ? "Kein gültiges Upgrade ausgewählt." : "Kein gültiger Neuwagen ausgewählt.";
+    summary.textContent = "Noch keine Auswahl getroffen.";
     return;
   }
 
@@ -608,6 +661,7 @@ async function updateNewOrderSummary() {
 
   summary.innerHTML =
     `<strong>${escHtml(product.display_name)}</strong><br>` +
+    `Auftragsart: <strong>${type === "upgrade" ? "Upgrade" : "Neuwagen"}</strong><br>` +
     `Gesamtbetrag: <strong>${escHtml(euro(total))}</strong><br>` +
     `Anzahlung wird nicht automatisch aktiviert.<br>` +
     `Möglicher Anzahlungsbetrag (${depositPercent}%): <strong>${escHtml(euro(deposit))}</strong><br>` +
@@ -620,6 +674,7 @@ async function submitNewOrder(e) {
   const customerName = document.getElementById("newOrderCustomerName").value.trim();
   const publicInfo = document.getElementById("newOrderPublicInfo").value.trim();
   const product = findSelectedOrderProduct();
+  const type = document.getElementById("newOrderType")?.value || "new";
 
   if (!customerName) {
     alert("Bitte Kundenname eintragen.");
@@ -627,7 +682,7 @@ async function submitNewOrder(e) {
   }
 
   if (!product) {
-    alert("Bitte ein gültiges Fahrzeug oder Upgrade aus der Suche auswählen.");
+    alert("Bitte eine gültige Auswahl treffen.");
     return;
   }
 
@@ -644,12 +699,17 @@ async function submitNewOrder(e) {
     const remaining = calcRemaining(total, depositRequired, deposit);
     const orderNumber = generateOrderNumber();
 
+    const productionSummary =
+      type === "upgrade"
+        ? "Upgrade: " + product.display_name
+        : product.display_name;
+
     const { data: order, error: orderError } = await window.lfcSupabase
       .from("orders")
       .insert({
         order_number: orderNumber,
         customer_name: customerName,
-        production_summary: product.display_name,
+        production_summary: productionSummary,
         status: "new",
         public_status_label: "Bestellung ist eingegangen",
         public_info: publicInfo,
@@ -671,9 +731,9 @@ async function submitNewOrder(e) {
       .from("order_items")
       .insert({
         order_id: order.id,
-        item_type: "vehicle",
+        item_type: type === "upgrade" ? "vehicle_upgrade" : "vehicle",
         vehicle_catalog_entry_id: product.id,
-        title: product.display_name,
+        title: productionSummary,
         quantity: 1,
         unit_price: total,
         total_price: total
@@ -748,7 +808,6 @@ function buildOrdersTable(data, mode) {
           const summary = orderItemsSummary(o);
           const rowEditableAll = canEditAll;
           const openEditable = !isFinishedMode;
-
           const calculatedRemaining = calcRemaining(o.invoice_total || o.total_price || 0, o.deposit_required, o.deposit_amount || 0);
 
           return `
@@ -911,7 +970,6 @@ async function saveOrder(e) {
       .maybeSingle();
 
     if (error) throw error;
-
     if (!data) throw new Error("Auftrag wurde nicht aktualisiert. Prüfe RLS/Rechte.");
 
     setAdminStatus("✅ Auftrag gespeichert: " + data.order_number);
@@ -984,6 +1042,7 @@ async function loadContacts() {
   const { data, error } = await window.lfcSupabase
     .from("contact_requests")
     .select("*")
+    .eq("admin_hidden", false)
     .order("created_at", { ascending: false })
     .limit(300);
 
@@ -1000,7 +1059,6 @@ async function loadContacts() {
           <th>Name</th>
           <th>Betreff</th>
           <th>Nachricht</th>
-          <th>Status</th>
           <th>Mitarbeiter</th>
           <th>Aktion</th>
         </tr>
@@ -1012,9 +1070,11 @@ async function loadContacts() {
             <td>${escHtml(r.name)}</td>
             <td>${escHtml(r.subject)}</td>
             <td><pre>${escHtml(r.message)}</pre></td>
-            <td>${escHtml(r.status)}</td>
             <td>${input(r.responsible_text || "", "responsible_text")}</td>
-            <td><button class="btn saveContactResponsible" type="button">Speichern</button></td>
+            <td>
+              <button class="btn saveContactResponsible" type="button">Speichern</button>
+              <button class="btn btn-danger hideContactRequest" type="button">Löschen</button>
+            </td>
           </tr>
         `).join("")}
       </tbody>
@@ -1022,6 +1082,7 @@ async function loadContacts() {
   `;
 
   document.querySelectorAll(".saveContactResponsible").forEach((btn) => btn.onclick = saveContactResponsible);
+  document.querySelectorAll(".hideContactRequest").forEach((btn) => btn.onclick = hideContactRequest);
 }
 
 async function saveContactResponsible(e) {
@@ -1051,6 +1112,25 @@ async function saveContactResponsible(e) {
   }
 }
 
+async function hideContactRequest(e) {
+  const tr = e.target.closest("tr");
+  const id = tr.dataset.id;
+
+  if (!confirm("Diese Anfrage ausblenden? Sie bleibt in der Datenbank erhalten.")) return;
+
+  const { error } = await window.lfcSupabase
+    .from("contact_requests")
+    .update({ admin_hidden: true })
+    .eq("id", id);
+
+  if (error) {
+    alert(error.message);
+  } else {
+    tr.remove();
+    setAdminStatus("✅ Anfrage ausgeblendet.");
+  }
+}
+
 /* =========================================================
    TERMINE
 ========================================================= */
@@ -1063,6 +1143,7 @@ async function loadAppointments() {
   const { data, error } = await window.lfcSupabase
     .from("appointment_requests")
     .select("*")
+    .eq("admin_hidden", false)
     .order("requested_date", { ascending: false })
     .order("requested_time", { ascending: false })
     .limit(300);
@@ -1081,7 +1162,6 @@ async function loadAppointments() {
           <th>Datum</th>
           <th>Uhrzeit</th>
           <th>Grund</th>
-          <th>Status</th>
           <th>Mitarbeiter</th>
           <th>Aktion</th>
         </tr>
@@ -1094,9 +1174,11 @@ async function loadAppointments() {
             <td>${escHtml(r.requested_date)}</td>
             <td>${escHtml(r.requested_time)}</td>
             <td><pre>${escHtml(r.reason)}</pre></td>
-            <td>${escHtml(r.status)}</td>
             <td>${input(r.responsible_text || "", "responsible_text")}</td>
-            <td><button class="btn saveAppointmentResponsible" type="button">Speichern</button></td>
+            <td>
+              <button class="btn saveAppointmentResponsible" type="button">Speichern</button>
+              <button class="btn btn-danger hideAppointmentRequest" type="button">Löschen</button>
+            </td>
           </tr>
         `).join("")}
       </tbody>
@@ -1104,6 +1186,7 @@ async function loadAppointments() {
   `;
 
   document.querySelectorAll(".saveAppointmentResponsible").forEach((btn) => btn.onclick = saveAppointmentResponsible);
+  document.querySelectorAll(".hideAppointmentRequest").forEach((btn) => btn.onclick = hideAppointmentRequest);
 }
 
 async function saveAppointmentResponsible(e) {
@@ -1130,6 +1213,25 @@ async function saveAppointmentResponsible(e) {
   } finally {
     btn.disabled = false;
     btn.textContent = "Speichern";
+  }
+}
+
+async function hideAppointmentRequest(e) {
+  const tr = e.target.closest("tr");
+  const id = tr.dataset.id;
+
+  if (!confirm("Diese Terminanfrage ausblenden? Sie bleibt in der Datenbank erhalten.")) return;
+
+  const { error } = await window.lfcSupabase
+    .from("appointment_requests")
+    .update({ admin_hidden: true })
+    .eq("id", id);
+
+  if (error) {
+    alert(error.message);
+  } else {
+    tr.remove();
+    setAdminStatus("✅ Terminanfrage ausgeblendet.");
   }
 }
 
@@ -1163,10 +1265,7 @@ async function loadSettings() {
     .eq("setting_key", "appointment_calendar_settings")
     .maybeSingle();
 
-  const calendar = calendarSetting?.setting_value || {
-    enabled: true,
-    days: {}
-  };
+  const calendar = calendarSetting?.setting_value || { enabled: true, days: {} };
 
   const dayLabels = {
     monday: "Montag",
@@ -1343,8 +1442,8 @@ async function createUserFromSettings(e) {
 async function saveProfile(e) {
   const tr = e.target.closest("tr");
   const id = tr.dataset.id;
-
   const obj = {};
+
   tr.querySelectorAll("[data-name]").forEach((el) => {
     if (el.type === "checkbox") obj[el.dataset.name] = el.checked;
     else obj[el.dataset.name] = el.value;
@@ -1382,9 +1481,7 @@ async function saveCalendarSettings(e) {
 
   const { error } = await window.lfcSupabase
     .from("app_settings")
-    .update({
-      setting_value: setting
-    })
+    .update({ setting_value: setting })
     .eq("setting_key", "appointment_calendar_settings");
 
   if (error) {
