@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 <html lang="de">
-<head> 
+<head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
-  <title>LFC – Admin</title>
- 
+  <title>LFC – Verwaltung</title>
+
   <link rel="icon" href="lfc.favicon.ico">
   <link rel="stylesheet" href="assets/css/lfc.background.css">
   <link rel="stylesheet" href="assets/css/lfc.css">
@@ -22,6 +22,13 @@
       max-width:none;
       margin:0;
       padding:22px 12px 34px;
+      box-sizing:border-box;
+    }
+
+    .bt-page > .bt-card{
+      width:100%;
+      max-width:none;
+      box-sizing:border-box;
     }
 
     .tabs{
@@ -37,23 +44,31 @@
       background:transparent;
       color:inherit;
       cursor:pointer;
+      transition: border-color .15s ease, color .15s ease, transform .15s ease;
+    }
+
+    .tab:hover{
+      border-color:rgba(255,153,0,.55);
+      color:var(--accent-2, #ffb347);
+      transform:translateY(-1px);
     }
 
     .tab.active{
-      border-color:rgba(255,153,0,.65);
-      color:var(--accent-2);
+      border-color:rgba(255,153,0,.75);
+      color:var(--accent-2, #ffb347);
+      box-shadow:0 0 0 1px rgba(255,153,0,.12);
     }
 
     .wrap{
-      overflow:auto;
       width:100%;
       max-width:none;
+      overflow:auto;
+      -webkit-overflow-scrolling:touch;
     }
 
     .admin-table{
       width:100%;
       border-collapse:collapse;
-      min-width:1200px;
     }
 
     .admin-table th,
@@ -64,13 +79,49 @@
       vertical-align:top;
     }
 
+    .admin-table th{
+      font-size:12px;
+      letter-spacing:.05em;
+      text-transform:uppercase;
+      opacity:.9;
+    }
+
+    .admin-table.orders-table{
+      width:100%;
+      min-width:1900px;
+      border-collapse:collapse;
+    }
+
+    .admin-table.orders-table thead{
+      position:relative;
+      z-index:50;
+    }
+
+    .admin-table.orders-table thead th{
+      position:sticky;
+      top:0;
+      z-index:50;
+      background:rgba(10,8,7,.98);
+      backdrop-filter:blur(12px);
+      -webkit-backdrop-filter:blur(12px);
+      box-shadow:
+        0 1px 0 rgba(255,255,255,.12),
+        0 10px 24px rgba(0,0,0,.45);
+    }
+
     .input{
       width:100%;
+      box-sizing:border-box;
       padding:8px;
       border:1px solid rgba(255,255,255,.14);
       background:rgba(0,0,0,.18);
       color:inherit;
       outline:none;
+    }
+
+    .input:focus{
+      border-color:rgba(255,153,0,.55);
+      box-shadow:0 0 0 1px rgba(255,153,0,.14);
     }
 
     textarea.input{
@@ -91,11 +142,27 @@
       color:inherit;
       cursor:pointer;
       margin:2px 0;
+      transition: border-color .15s ease, color .15s ease, transform .15s ease;
     }
 
-    .btn:hover{
+    .btn:hover:not(:disabled){
       border-color:rgba(255,153,0,.55);
-      color:var(--accent-2);
+      color:var(--accent-2, #ffb347);
+      transform:translateY(-1px);
+    }
+
+    .btn:disabled{
+      opacity:.6;
+      cursor:wait;
+    }
+
+    .btn-danger{
+      border-color:rgba(255,80,80,.35);
+    }
+
+    .btn-danger:hover:not(:disabled){
+      border-color:rgba(255,80,80,.75);
+      color:#ff8c8c;
     }
 
     .img-editor{
@@ -105,7 +172,7 @@
 
     .img-editor textarea{
       min-height:130px;
-      font-family:var(--bt-font-mono, monospace);
+      font-family:monospace;
       font-size:12px;
       line-height:1.35;
     }
@@ -149,12 +216,13 @@
       opacity:.75;
       padding:7px 8px;
       border:1px dashed rgba(255,255,255,.16);
+      margin-top:8px;
     }
 
     .admin-row-actions{
       display:grid;
       gap:6px;
-      min-width:110px;
+      min-width:120px;
     }
 
     .status-line{
@@ -166,15 +234,51 @@
       white-space:pre-wrap;
       word-break:break-word;
       margin:0;
-      font-family:var(--bt-font-mono, monospace);
+      font-family:monospace;
       font-size:12px;
+    }
+
+    .order-create-card{
+      max-width:900px;
+      margin:0 auto;
+      display:grid;
+      gap:12px;
+    }
+
+    .order-create-grid{
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:12px;
+    }
+
+    .shop-field{
+      display:grid;
+      gap:6px;
+    }
+
+    .shop-form{
+      display:grid;
+      gap:12px;
+    }
+
+    .shop-form-actions{
+      display:flex;
+      gap:10px;
+      align-items:center;
+      flex-wrap:wrap;
+    }
+
+    @media(max-width:800px){
+      .order-create-grid{
+        grid-template-columns:1fr;
+      }
     }
   </style>
 </head>
 
 <body>
-  <div id="bt-glow-orbits"></div>
-  <div id="bt-points"></div>
+  <div id="bt-glow-orbits" aria-hidden="true"></div>
+  <div id="bt-points" aria-hidden="true"></div>
 
   <header id="bt-navbar" class="bt-header"></header>
 
@@ -182,7 +286,7 @@
     <section class="bt-card">
       <div class="bt-pill">
         <span class="bt-pill-dot"></span>
-        <span>Admin</span>
+        <span>Verwaltung</span>
       </div>
 
       <h1>LFC Verwaltung</h1>
@@ -190,14 +294,14 @@
       <div id="authStatus" class="bt-hint">Prüfe Login…</div>
 
       <div class="tabs">
-        <button class="tab active" data-tab="vehicles">Katalog</button>
-        <button class="tab" data-tab="newOrder">Neuer Auftrag</button>
-        <button class="tab" data-tab="openOrders">Offene Aufträge</button>
-        <button class="tab admin-only-tab" data-tab="finishedOrders">Fertige Aufträge</button>
-        <button class="tab" data-tab="contacts">Anfragen</button>
+        <button class="tab active" data-tab="vehicles" data-min-role="manager">Katalog</button>
+        <button class="tab" data-tab="newOrder" data-min-role="employee">Neuer Auftrag</button>
+        <button class="tab" data-tab="openOrders" data-min-role="employee">Offene Aufträge</button>
+        <button class="tab" data-tab="finishedOrders" data-min-role="manager">Fertige Aufträge</button>
+        <button class="tab" data-tab="contacts" data-min-role="employee">Anfragen</button>
       </div>
 
-      <div id="adminStatus" class="status-line small"></div>
+      <div id="adminStatus" class="status-line small" aria-live="polite"></div>
       <div id="content" class="wrap"></div>
     </section>
   </main>
