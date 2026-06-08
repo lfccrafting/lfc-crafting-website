@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
-  <title>LFC – Kontakt</title>
+  <title>LFC – Fahrzeugkatalog</title>
 
   <link rel="icon" href="lfc.favicon.ico">
   <link rel="stylesheet" href="assets/css/lfc.background.css">
@@ -14,23 +14,234 @@
   <script defer src="assets/js/supabase-client.js"></script>
   <script defer src="assets/js/lfc.background.js"></script>
   <script defer src="assets/js/common.js"></script>
-  <script defer src="assets/js/kontakt.js"></script>
+  <script defer src="assets/js/katalog.js"></script>
 
   <style>
-    .contact-layout{
-      display:grid;
-      grid-template-columns:minmax(0,1fr) minmax(0,1fr);
-      gap:18px;
-      align-items:start;
+    .catalog-page{
+      width:min(1280px, calc(100vw - 32px));
+      max-width:1280px;
+      margin:0 auto;
+      padding:28px 0 42px;
+      box-sizing:border-box;
     }
 
-    .contact-card{
+    .catalog-hero{
       display:grid;
-      gap:14px;
+      gap:18px;
+      margin-bottom:22px;
+    }
+
+    .catalog-header-card{
+      display:grid;
+      gap:18px;
+    }
+
+    .catalog-header-top{
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:18px;
+      flex-wrap:wrap;
+    }
+
+    .catalog-header-text{
+      display:grid;
+      gap:10px;
+      min-width:260px;
+      max-width:780px;
+    }
+
+    .catalog-header-text h1{
+      margin:0;
+    }
+
+    .catalog-header-text p{
+      margin:0;
+    }
+
+    .catalog-stats{
+      display:flex;
+      gap:10px;
+      flex-wrap:wrap;
+      justify-content:flex-end;
+    }
+
+    .catalog-stat{
+      padding:10px 12px;
+      border:1px solid rgba(255,255,255,.12);
+      background:rgba(0,0,0,.18);
+      min-width:130px;
+    }
+
+    .catalog-stat strong{
+      display:block;
+      color:var(--accent-2,#ffb347);
+      font-size:18px;
+      line-height:1.1;
+    }
+
+    .catalog-stat span{
+      font-size:12px;
+      opacity:.75;
+    }
+
+    .shop-search-section{
+      display:grid;
+      gap:12px;
+    }
+
+    .shop-search-bar{
+      display:grid;
+      gap:8px;
+    }
+
+    .shop-search-input{
+      width:100%;
+      box-sizing:border-box;
+      padding:13px 14px;
+      border:1px solid rgba(255,255,255,.16);
+      background:rgba(0,0,0,.22);
+      color:inherit;
+      outline:none;
+      font-size:15px;
+    }
+
+    .shop-search-input:focus{
+      border-color:rgba(255,153,0,.58);
+      box-shadow:0 0 0 1px rgba(255,153,0,.16);
+    }
+
+    .shop-search-info{
+      font-size:12px;
+      opacity:.75;
+      min-height:1.2em;
+    }
+
+    .shop-group-nav{
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+    }
+
+    .shop-group-nav button,
+    .shop-group-nav a{
+      padding:8px 10px;
+      border:1px solid rgba(255,255,255,.14);
+      background:rgba(0,0,0,.16);
+      color:inherit;
+      cursor:pointer;
+      text-decoration:none;
+    }
+
+    .shop-group-nav button:hover,
+    .shop-group-nav a:hover{
+      border-color:rgba(255,153,0,.55);
+      color:var(--accent-2,#ffb347);
+    }
+
+    #shopStatus{
+      margin-top:2px;
+    }
+
+    .shop-no-results{
+      display:none;
+      margin:18px 0;
+      padding:14px 16px;
+      border:1px solid rgba(255,255,255,.12);
+      background:rgba(0,0,0,.18);
+    }
+
+    #shopContent{
+      display:grid;
+      gap:22px;
+    }
+
+    .catalog-footer-note{
+      margin-top:28px;
+    }
+
+    .shop-modal{
+      position:fixed;
+      inset:0;
+      display:none;
+      z-index:2000;
+    }
+
+    .shop-modal[aria-hidden="false"]{
+      display:block;
+    }
+
+    .shop-modal-backdrop{
+      position:absolute;
+      inset:0;
+      background:rgba(0,0,0,.72);
+      backdrop-filter:blur(8px);
+      -webkit-backdrop-filter:blur(8px);
+    }
+
+    .shop-modal-dialog{
+      position:relative;
+      width:min(920px, calc(100vw - 28px));
+      max-height:calc(100vh - 40px);
+      margin:20px auto;
+      overflow:auto;
+      border:1px solid rgba(255,255,255,.16);
+      background:rgba(14,12,10,.96);
+      box-shadow:0 22px 70px rgba(0,0,0,.55);
+    }
+
+    .shop-request-dialog{
+      width:min(760px, calc(100vw - 28px));
+    }
+
+    .shop-modal-header{
+      position:sticky;
+      top:0;
+      z-index:2;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+      padding:16px 18px;
+      border-bottom:1px solid rgba(255,255,255,.1);
+      background:rgba(14,12,10,.98);
+      backdrop-filter:blur(10px);
+      -webkit-backdrop-filter:blur(10px);
+    }
+
+    .shop-modal-title{
+      margin:0;
+      font-size:22px;
+    }
+
+    .shop-modal-close{
+      width:36px;
+      height:36px;
+      border:1px solid rgba(255,255,255,.16);
+      background:transparent;
+      color:inherit;
+      font-size:26px;
+      line-height:1;
+      cursor:pointer;
+    }
+
+    .shop-modal-close:hover{
+      border-color:rgba(255,153,0,.55);
+      color:var(--accent-2,#ffb347);
+    }
+
+    .shop-modal-body{
+      padding:18px;
     }
 
     .shop-form{
       display:grid;
+      gap:14px;
+    }
+
+    .shop-form-grid{
+      display:grid;
+      grid-template-columns:1fr 1fr;
       gap:12px;
     }
 
@@ -44,31 +255,60 @@
       opacity:.9;
     }
 
-    .input{
+    .shop-field input,
+    .shop-field select,
+    .shop-field textarea{
       width:100%;
       box-sizing:border-box;
       padding:10px 11px;
       border:1px solid rgba(255,255,255,.14);
-      background:rgba(0,0,0,.18);
+      background:rgba(0,0,0,.22);
       color:inherit;
       outline:none;
     }
 
-    .input:focus{
+    .shop-field textarea{
+      min-height:110px;
+      resize:vertical;
+    }
+
+    .shop-field input:focus,
+    .shop-field select:focus,
+    .shop-field textarea:focus{
       border-color:rgba(255,153,0,.55);
       box-shadow:0 0 0 1px rgba(255,153,0,.14);
     }
 
-    textarea.input{
-      min-height:130px;
-      resize:vertical;
+    .shop-form-summary{
+      padding:12px;
+      border:1px solid rgba(255,255,255,.12);
+      background:rgba(0,0,0,.18);
     }
 
     .shop-form-actions{
       display:flex;
+      justify-content:flex-end;
       gap:10px;
-      align-items:center;
       flex-wrap:wrap;
+    }
+
+    .shop-form-cancel,
+    .shop-form-submit{
+      padding:10px 12px;
+      border:1px solid rgba(255,255,255,.16);
+      background:transparent;
+      color:inherit;
+      cursor:pointer;
+    }
+
+    .shop-form-submit{
+      border-color:rgba(255,153,0,.45);
+      color:var(--accent-2,#ffb347);
+    }
+
+    .shop-form-cancel:hover,
+    .shop-form-submit:hover{
+      border-color:rgba(255,153,0,.75);
     }
 
     .shop-form-status{
@@ -76,40 +316,62 @@
       font-size:13px;
     }
 
-    .shop-form-status.ok,
-    .small.ok{
-      color:#7dffb2;
+    .shop-img-lightbox{
+      position:fixed;
+      inset:0;
+      display:none;
+      z-index:2200;
     }
 
-    .shop-form-status.err,
-    .small.err{
-      color:#ff8c8c;
+    .shop-img-lightbox[aria-hidden="false"]{
+      display:block;
     }
 
-    .calendar-info-table{
-      width:100%;
-      border-collapse:collapse;
-      margin-top:8px;
+    .shop-img-lightbox-backdrop{
+      position:absolute;
+      inset:0;
+      background:rgba(0,0,0,.82);
+      backdrop-filter:blur(8px);
+      -webkit-backdrop-filter:blur(8px);
     }
 
-    .calendar-info-table td{
-      padding:6px 0;
-      border-bottom:1px solid rgba(255,255,255,.08);
-      vertical-align:top;
+    .shop-img-lightbox-inner{
+      position:relative;
+      width:calc(100vw - 40px);
+      height:calc(100vh - 40px);
+      margin:20px auto;
+      display:grid;
+      place-items:center;
     }
 
-    .calendar-info-table td:first-child{
-      width:130px;
-      opacity:.85;
+    .shop-img-lightbox-inner img{
+      max-width:100%;
+      max-height:100%;
+      object-fit:contain;
+      box-shadow:0 20px 70px rgba(0,0,0,.65);
     }
 
-    .bt-hint strong{
-      color:var(--accent-2,#ffb347);
-    }
+    @media(max-width:760px){
+      .catalog-page{
+        width:min(100%, calc(100vw - 20px));
+        padding:18px 0 32px;
+      }
 
-    @media(max-width:900px){
-      .contact-layout{
+      .catalog-header-top{
+        display:grid;
+      }
+
+      .catalog-stats{
+        justify-content:flex-start;
+      }
+
+      .shop-form-grid{
         grid-template-columns:1fr;
+      }
+
+      .shop-modal-dialog{
+        margin:12px auto;
+        max-height:calc(100vh - 24px);
       }
     }
   </style>
@@ -121,159 +383,138 @@
 
   <header id="bt-navbar" class="bt-header"></header>
 
-  <main class="bt-page">
-    <section class="bt-hero">
-      <div class="bt-pill">
-        <span class="bt-pill-dot"></span>
-        <span>Kontakt</span>
-      </div>
+  <main class="catalog-page">
+    <section class="catalog-hero">
+      <article class="bt-card catalog-header-card">
+        <div class="catalog-header-top">
+          <div class="catalog-header-text">
+            <div class="bt-pill">
+              <span class="bt-pill-dot"></span>
+              <span>Fahrzeugkatalog</span>
+            </div>
 
-      <h1>Kontakt & Terminanfrage</h1>
+            <h1>LFC Fahrzeugkatalog</h1>
 
-      <p class="bt-lead">
-        Sende uns eine allgemeine Anfrage oder stelle direkt eine Terminanfrage.
-        Die möglichen Terminzeiten werden automatisch aus den Einstellungen im internen Bereich geladen.
-      </p>
+            <p class="bt-lead">
+              Entdecke verfügbare Fahrzeuge, Varianten und Upgrade-Möglichkeiten.
+              Wähle ein Fahrzeug aus, öffne die Details und sende bei Interesse direkt eine Anfrage.
+            </p>
+          </div>
+
+          <div class="catalog-stats" aria-label="Katalog Hinweise">
+            <div class="catalog-stat">
+              <strong>Katalog</strong>
+              <span>Fahrzeuge & Upgrades</span>
+            </div>
+
+            <div class="catalog-stat">
+              <strong>Anfrage</strong>
+              <span>direkt aus dem Fahrzeug</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="shop-search-section">
+          <div class="shop-search-bar">
+            <input
+              id="shopSearch"
+              class="shop-search-input"
+              type="search"
+              placeholder="Suche nach Fahrzeug, Upgrade oder Beschreibung …"
+              autocomplete="off"
+            >
+            <div class="shop-search-info"></div>
+          </div>
+
+          <div id="shopGroupNav" class="shop-group-nav" aria-label="Gruppen-Navigation"></div>
+        </div>
+
+        <div id="shopStatus" class="bt-hint">
+          🔄 Fahrzeugdaten werden geladen …
+        </div>
+      </article>
     </section>
 
-    <section class="contact-layout">
-      <article class="bt-card contact-card">
-        <div>
-          <div class="bt-pill">
-            <span class="bt-pill-dot"></span>
-            <span>Anfrage</span>
+    <div id="shopNoResults" class="shop-no-results">
+      <strong>Keine Treffer.</strong> Bitte Suchbegriff ändern oder löschen.
+    </div>
+
+    <section id="shopContent" aria-live="polite"></section>
+
+    <div class="bt-hint bt-text-muted catalog-footer-note">
+      Hinweise: Preise und Daten können sich ändern. Für genaue Details bitte eine Anfrage senden.
+    </div>
+  </main>
+
+  <footer id="bt-footer"></footer>
+
+  <div id="shopModal" class="shop-modal" aria-hidden="true">
+    <div class="shop-modal-backdrop"></div>
+
+    <div class="shop-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="shopModalTitle">
+      <div class="shop-modal-header">
+        <h2 id="shopModalTitle" class="shop-modal-title">Fahrzeug</h2>
+        <button id="shopModalClose" class="shop-modal-close" type="button" aria-label="Schließen">×</button>
+      </div>
+
+      <div id="shopModalContent" class="shop-modal-body"></div>
+    </div>
+  </div>
+
+  <div id="requestModal" class="shop-modal" aria-hidden="true">
+    <div class="shop-modal-backdrop"></div>
+
+    <div class="shop-modal-dialog shop-request-dialog" role="dialog" aria-modal="true" aria-labelledby="requestModalTitle">
+      <div class="shop-modal-header">
+        <h2 id="requestModalTitle" class="shop-modal-title">Anfrage</h2>
+        <button id="requestModalClose" class="shop-modal-close" type="button" aria-label="Schließen">×</button>
+      </div>
+
+      <div class="shop-modal-body">
+        <form id="requestForm" class="shop-form">
+          <div id="requestSummary" class="shop-form-summary"></div>
+
+          <div id="requestVehicleWrap" style="display:none"></div>
+
+          <div id="requestModeWrap" class="shop-field">
+            <label for="reqMode">Auswahl</label>
+            <select id="reqMode"></select>
           </div>
 
-          <h2>Kontaktanfrage senden</h2>
+          <div class="shop-form-grid">
+            <div class="shop-field">
+              <label for="reqName">Name *</label>
+              <input id="reqName" type="text" autocomplete="name" required>
+            </div>
 
-          <p class="bt-hint">
-            Nutze dieses Formular für allgemeine Fragen, Kataloganfragen oder Rückmeldungen.
-          </p>
-        </div>
-
-        <form id="contactForm" class="shop-form">
-          <div class="shop-field">
-            <label for="contactName">Name *</label>
-            <input
-              class="input"
-              id="contactName"
-              name="name"
-              type="text"
-              autocomplete="name"
-              required
-              placeholder="Dein Name"
-            >
-          </div>
-
-          <div class="shop-field">
-            <label for="contactSubject">Betreff *</label>
-            <input
-              class="input"
-              id="contactSubject"
-              name="subject"
-              type="text"
-              required
-              placeholder="Betreff der Anfrage"
-            >
-          </div>
-
-          <div class="shop-field">
-            <label for="contactMessage">Nachricht *</label>
-            <textarea
-              class="input"
-              id="contactMessage"
-              name="message"
-              required
-              placeholder="Deine Nachricht"
-            ></textarea>
-          </div>
-
-          <div class="shop-form-actions">
-            <button class="btn" type="submit">Anfrage senden</button>
-          </div>
-
-          <div id="contactStatus" class="shop-form-status" aria-live="polite"></div>
-        </form>
-      </article>
-
-      <article class="bt-card contact-card">
-        <div>
-          <div class="bt-pill">
-            <span class="bt-pill-dot"></span>
-            <span>Termin</span>
-          </div>
-
-          <h2>Terminanfrage senden</h2>
-
-          <p class="bt-hint">
-            Wähle ein Datum und eine Uhrzeit innerhalb der freigegebenen Kalenderzeiten.
-          </p>
-        </div>
-
-        <div id="appointmentCalendarInfo" class="bt-hint" data-appointment-calendar-info>
-          Kalenderzeiten werden geladen …
-        </div>
-
-        <form id="appointmentForm" class="shop-form">
-          <div class="shop-field">
-            <label for="appointmentName">Name *</label>
-            <input
-              class="input"
-              id="appointmentName"
-              name="name"
-              type="text"
-              autocomplete="name"
-              required
-              placeholder="Dein Name"
-            >
-          </div>
-
-          <div class="shop-field">
-            <label for="appointmentDate">Wunschtermin Datum *</label>
-            <input
-              class="input"
-              id="appointmentDate"
-              name="requested_date"
-              type="date"
-              required
-            >
-          </div>
-
-          <div class="shop-field">
-            <label for="appointmentTime">Wunschtermin Uhrzeit *</label>
-            <input
-              class="input"
-              id="appointmentTime"
-              name="requested_time"
-              type="time"
-              required
-            >
-            <div id="appointmentHint" class="small" data-appointment-hint>
-              Bitte zuerst ein Datum auswählen.
+            <div class="shop-field">
+              <label for="reqKontakt">Kontakt *</label>
+              <input id="reqKontakt" type="text" autocomplete="email" placeholder="Telefon, SMS oder E-Mail" required>
             </div>
           </div>
 
           <div class="shop-field">
-            <label for="appointmentReason">Grund / Nachricht *</label>
-            <textarea
-              class="input"
-              id="appointmentReason"
-              name="reason"
-              required
-              placeholder="Worum geht es bei dem Termin?"
-            ></textarea>
+            <label for="reqNote">Notiz</label>
+            <textarea id="reqNote" placeholder="Optional: Farbe, Sonderwünsche, Termin …"></textarea>
           </div>
 
           <div class="shop-form-actions">
-            <button class="btn" type="submit">Terminanfrage senden</button>
+            <button id="requestCancel" class="shop-form-cancel" type="button">Abbrechen</button>
+            <button id="requestSend" class="shop-form-submit" type="submit">Anfrage senden</button>
           </div>
 
-          <div id="appointmentStatus" class="shop-form-status" aria-live="polite"></div>
+          <div id="requestStatus" class="shop-form-status" aria-live="polite"></div>
         </form>
-      </article>
-    </section>
-  </main>
+      </div>
+    </div>
+  </div>
 
-  <footer id="bt-footer"></footer>
+  <div id="imageLightbox" class="shop-img-lightbox" aria-hidden="true">
+    <div class="shop-img-lightbox-backdrop"></div>
+
+    <div class="shop-img-lightbox-inner">
+      <img id="imageLightboxImg" src="" alt="">
+    </div>
+  </div>
 </body>
 </html>
