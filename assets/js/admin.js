@@ -1,8 +1,16 @@
 let currentTab = "vehicles";
 let vehicleGroupsCache = [];
-let orderProductsCache = [];
-let orderUpgradeCache = [];
+let orderVehiclesCache = [];
+let orderFamiliesCache = [];
+let orderResourcesCache = [];
 let currentUserRole = null;
+
+let craftDeps = {};
+let craftLoaded = false;
+
+const CRAFT_SHEET_ID = "1ObAKUBNv5IjXEyY0TD85gK9dJhlm8Uq7Qj6QZgHkoZg";
+const TAB_RECIPES = "recipes";
+const TAB_RECIPE_ITEMS = "recipe_items";
 
 const FINISHED_STATUSES = ["completed", "cancelled", "rejected"];
 
@@ -35,6 +43,24 @@ function input(value, name, type = "text", extra = "") {
 
 function textarea(value, name, extra = "") {
   return `<textarea class="input" data-name="${name}" ${extra}>${escHtml(value || "")}</textarea>`;
+}
+
+function norm(str) {
+  return String(str ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+}
+
+function normKey(str) {
+  return String(str ?? "")
+    .normalize("NFKC")
+    .replace(/[\u00A0\u200B\t\n\r]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[;:]+$/, "")
+    .toLowerCase();
 }
 
 function roleLevel(role) {
@@ -72,6 +98,7 @@ function applyTabVisibility() {
 function setAdminStatus(message, type = "") {
   const el = document.getElementById("adminStatus");
   if (!el) return;
+
   el.textContent = message || "";
   el.className = "status-line small";
   if (type) el.classList.add(type);
@@ -107,11 +134,32 @@ function euro(value) {
   });
 }
 
-function normalizePreviewImageUrl(url) {
+function normalizeImageUrl(url) {
   const s = String(url || "").trim();
   if (!s) return "";
   if (!/^https:\/\//i.test(s)) return "";
   return s;
+}
+
+function getVehicleImages(v) {
+  const arr = Array.isArray(v.images) ? v.images : [];
+  return arr
+    .slice()
+    .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0))
+    .map((x) => normalizeImageUrl(x.url || x.image_url))
+    .filter(Boolean);
+}
+
+function firstVehicleImage(v) {
+  return getVehicleImages(v)[0] || "";
+}
+
+function vehicleKey(v) {
+  return normKey(v.craft_key || v.blueprint_name || v.display_name || v.id);
+}
+
+function isRucksackVehicle(v) {
+  return norm(v.group_name).includes("rucksack");
 }
 
 function parseImageTextarea(value) {
@@ -134,7 +182,7 @@ function imagesToTextarea(images) {
   return (images || [])
     .slice()
     .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0))
-    .map((img) => String(img.image_url || "").trim())
+    .map((img) => String(img.image_url || img.url || "").trim())
     .filter(Boolean)
     .filter((url) => /^https:\/\//i.test(url))
     .join("\n");
@@ -152,7 +200,7 @@ function renderImagePreview(imageText) {
       ${urls.slice(0, 10).map((url, index) => `
         <div class="img-preview-item" title="${escHtml(url)}">
           <span>${index + 1}${index === 0 ? " ★" : ""}</span>
-          <img src="${escHtml(normalizePreviewImageUrl(url))}" alt="" loading="lazy" onerror="this.style.opacity='.25'">
+          <img src="${escHtml(url)}" alt="" loading="lazy" onerror="this.style.opacity='.25'">
         </div>
       `).join("")}
     </div>
@@ -204,102 +252,450 @@ function calcRemaining(invoiceTotal, depositRequired, depositAmount) {
   return Math.max(0, total - deposit);
 }
 
-function recalcOrderRowRemaining(tr) {
-  if (!tr) return;
-
-  const invoiceTotalEl = tr.querySelector('[data-name="invoice_total"]');
-  const depositRequiredEl = tr.querySelector('[data-name="deposit_required"]');
-  const depositAmountEl = tr.querySelector('[data-name="deposit_amount"]');
-  const remainingEl = tr.querySelector('[data-role="invoice_remaining_display"]');
-
-  if (!remainingEl) return;
-
-  const invoiceTotal = invoiceTotalEl ? Number(invoiceTotalEl.value || 0) : Number(tr.dataset.invoiceTotal || 0);
-  const depositRequired = depositRequiredEl ? depositRequiredEl.checked : String(tr.dataset.depositRequired || "false") === "true";
-  const depositAmount = depositAmountEl ? Number(depositAmountEl.value || 0) : Number(tr.dataset.depositAmount || 0);
-
-  remainingEl.textContent = euro(calcRemaining(invoiceTotal, depositRequired, depositAmount));
-}
-
-function bindOrderCalculationEvents() {
-  document.querySelectorAll(".orders-table tbody tr").forEach((tr) => {
-    ["invoice_total", "deposit_amount", "deposit_required"].forEach((name) => {
-      const el = tr.querySelector(`[data-name="${name}"]`);
-      if (!el) return;
-      el.addEventListener("input", () => recalcOrderRowRemaining(tr));
-      el.addEventListener("change", () => recalcOrderRowRemaining(tr));
-    });
-
-    recalcOrderRowRemaining(tr);
-  });
-}
-
 function generateOrderNumber() {
   const d = new Date();
   const pad = (n) => String(n).padStart(2, "0");
   return "LFC-" + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + "-" + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
 }
 
-async function triggerDiscordNotify() {
+/* =========================================================
+   GVIZ / UPGRADE-LOGIK
+========================================================= */
+
+function gvizJSONP(sheetName, timeoutMs = 15000) {
+  return new Promise((resolve, reject) => {
+    const cb =
+      "__lfc_admin_gviz_" +
+      sheetName.replace(/[^a-z0-9]/gi, "_") +
+      "_" +
+      Math.random().toString(36).slice(2);
+
+    const url =
+      "https://docs.google.com/spreadsheets/d/" +
+      encodeURIComponent(CRAFT_SHEET_ID) +
+      "/gviz/tq?tqx=out:json;responseHandler:" +
+      encodeURIComponent(cb) +
+      "&sheet=" +
+      encodeURIComponent(sheetName);
+
+    const script = document.createElement("script");
+
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error("Timeout beim Laden von Sheet: " + sheetName));
+    }, timeoutMs);
+
+    function cleanup() {
+      clearTimeout(timer);
+
+      try {
+        delete window[cb];
+      } catch {}
+
+      if (script.parentNode) {
+        script.parentNode.removeChild(script);
+      }
+    }
+
+    window[cb] = function (payload) {
+      cleanup();
+
+      try {
+        const cols = (payload.table.cols || []).map((c, index) => {
+          const label = String(c.label || c.id || `col_${index}`).trim();
+          return label || `col_${index}`;
+        });
+
+        const rows = (payload.table.rows || []).map((row) => {
+          const obj = {};
+
+          (row.c || []).forEach((cell, index) => {
+            const key = cols[index] || `col_${index}`;
+            obj[key] = cell ? cell.v : "";
+          });
+
+          return obj;
+        });
+
+        resolve(rows);
+      } catch (error) {
+        reject(error);
+      }
+    };
+
+    script.onerror = () => {
+      cleanup();
+      reject(new Error("GViz Fehler beim Laden von Sheet: " + sheetName));
+    };
+
+    script.src = url;
+    document.head.appendChild(script);
+  });
+}
+
+function getRowValue(row, names) {
+  const entries = Object.entries(row || {});
+  const normalized = entries.map(([key, value]) => [normKey(key), value]);
+
+  for (const name of names) {
+    const target = normKey(name);
+    const found = normalized.find(([key]) => key === target);
+    if (found) return found[1];
+  }
+
+  for (const name of names) {
+    const target = normKey(name);
+    const found = normalized.find(([key]) => key.includes(target));
+    if (found) return found[1];
+  }
+
+  return "";
+}
+
+function addDependency(productKey, itemKey) {
+  const product = normKey(productKey);
+  const item = normKey(itemKey);
+
+  if (!product || !item || product === item) return;
+
+  if (!craftDeps[product]) craftDeps[product] = new Set();
+  craftDeps[product].add(item);
+}
+
+async function loadCraftDependencies() {
+  craftDeps = {};
+  craftLoaded = false;
+
   try {
-    await fetch(`${window.LFC_SUPABASE_CONFIG.url}/functions/v1/discord-notify`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ mode: "queue" })
+    const [itemsRows] = await Promise.all([
+      gvizJSONP(TAB_RECIPE_ITEMS),
+      gvizJSONP(TAB_RECIPES).catch(() => [])
+    ]);
+
+    itemsRows.forEach((row) => {
+      const product =
+        getRowValue(row, [
+          "product",
+          "produkt",
+          "recipe",
+          "recipe_key",
+          "craft_key",
+          "target",
+          "result",
+          "output",
+          "output_key",
+          "result_key"
+        ]) || "";
+
+      const item =
+        getRowValue(row, [
+          "item",
+          "item_key",
+          "input",
+          "input_key",
+          "ingredient",
+          "ingredient_key",
+          "source",
+          "source_key",
+          "required_item"
+        ]) || "";
+
+      const qty =
+        getRowValue(row, [
+          "qty",
+          "quantity",
+          "menge",
+          "amount",
+          "anzahl"
+        ]) || "";
+
+      if (!product || !item) return;
+      if (qty !== "" && Number(qty) === 0) return;
+
+      addDependency(product, item);
     });
+
+    craftDeps = Object.fromEntries(
+      Object.entries(craftDeps).map(([key, set]) => [key, Array.from(set)])
+    );
+
+    craftLoaded = Object.keys(craftDeps).length > 0;
   } catch (error) {
-    console.warn("Discord Notify konnte nicht ausgelöst werden:", error);
+    console.warn("Upgrade-Daten konnten nicht geladen werden. Fallback aktiv.", error);
+    craftDeps = {};
+    craftLoaded = false;
   }
 }
 
-async function loadVehicleGroups() {
-  const { data, error } = await window.lfcSupabase
-    .from("vehicle_groups")
-    .select("id,name,sort_order,is_active")
-    .order("sort_order", { ascending: true })
-    .order("name", { ascending: true });
+function craftDependsOn(childKey, ancestorKey) {
+  const start = normKey(childKey);
+  const target = normKey(ancestorKey);
 
-  if (error) throw error;
-  vehicleGroupsCache = data || [];
+  if (!start || !target || start === target) return false;
+
+  const visited = new Set();
+  const stack = [start];
+
+  while (stack.length) {
+    const key = stack.pop();
+
+    if (visited.has(key)) continue;
+    visited.add(key);
+
+    const deps = craftDeps[key] || [];
+
+    for (const dep of deps) {
+      if (dep === target) return true;
+      stack.push(dep);
+    }
+  }
+
+  return false;
 }
 
-async function loadOrderProducts() {
-  const { data, error } = await window.lfcSupabase
-    .from("vehicle_catalog_entries")
-    .select("id,craft_key,display_name,price,is_visible,group_id")
-    .order("display_name", { ascending: true });
+function fallbackFamilyKey(v) {
+  let s = String(v.display_name || v.blueprint_name || "")
+    .replace(/\s*Bauplan\s*$/i, "")
+    .trim();
 
-  if (error) throw error;
+  s = s
+    .replace(/\s+/g, " ")
+    .replace(/\s*-\s*S$/i, "")
+    .replace(/\s*S$/i, "")
+    .replace(/\s*-\s*R$/i, "")
+    .replace(/\s+RAW$/i, "")
+    .replace(/\s+D-Type$/i, "")
+    .replace(/\s+Cisterne$/i, "")
+    .replace(/\s+Gerät$/i, "")
+    .replace(/\s+t\d+$/i, "")
+    .replace(/\s+HardLiner.*$/i, " HardLiner")
+    .replace(/\s+Highline.*$/i, " Highline")
+    .trim();
 
-  const all = (data || []).filter((x) => x.group_id);
+  if (/cyberbeast/i.test(s)) s = "Tesla Cybertruck";
+  if (/stingray/i.test(s)) s = "Corvette C2";
+  if (/z-type/i.test(s)) s = "Truffade Z-Type";
+  if (/viper/i.test(s)) s = "Dodge Viper SRT 10";
+  if (/regalia/i.test(s)) s = "Quartz Regalia";
+  if (/hotknife/i.test(s)) s = "Vapid Hotknife";
+  if (/scania\s+s-520/i.test(s)) s = "Scania S-520";
+  if (/actros\s+666/i.test(s)) s = "Mercedes-Benz Actros 666";
 
-  orderProductsCache = all.filter((x) => {
-    const name = String(x.display_name || "").toLowerCase();
-    return !name.includes("upgrade") && !name.includes("→") && !name.includes(" zu ");
+  return normKey((v.group_name || "") + "::" + s);
+}
+
+function connectedFamiliesByCraft(items) {
+  const idToItem = new Map();
+  const neighbors = new Map();
+
+  items.forEach((v) => {
+    idToItem.set(v.id, v);
+    neighbors.set(v.id, new Set());
   });
 
-  orderUpgradeCache = all.filter((x) => !orderProductsCache.includes(x));
+  for (let i = 0; i < items.length; i++) {
+    for (let j = i + 1; j < items.length; j++) {
+      const a = items[i];
+      const b = items[j];
 
-  if (!orderUpgradeCache.length) {
-    orderUpgradeCache = all;
+      const ak = vehicleKey(a);
+      const bk = vehicleKey(b);
+
+      const linked = craftDependsOn(ak, bk) || craftDependsOn(bk, ak);
+
+      if (linked) {
+        neighbors.get(a.id).add(b.id);
+        neighbors.get(b.id).add(a.id);
+      }
+    }
   }
+
+  const visited = new Set();
+  const families = [];
+
+  items.forEach((start) => {
+    if (visited.has(start.id)) return;
+
+    const queue = [start.id];
+    const comp = [];
+    visited.add(start.id);
+
+    while (queue.length) {
+      const id = queue.shift();
+      const item = idToItem.get(id);
+      if (item) comp.push(item);
+
+      for (const next of neighbors.get(id) || []) {
+        if (!visited.has(next)) {
+          visited.add(next);
+          queue.push(next);
+        }
+      }
+    }
+
+    families.push(comp);
+  });
+
+  return families;
 }
 
-async function loadDefaultDepositPercent() {
-  const { data, error } = await window.lfcSupabase
-    .from("app_settings")
-    .select("setting_value")
-    .eq("setting_key", "default_deposit_percent")
-    .maybeSingle();
+function fallbackFamiliesByName(items) {
+  const map = new Map();
 
-  if (error || !data) return 15;
+  items.forEach((v) => {
+    const key = fallbackFamilyKey(v);
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(v);
+  });
 
-  const raw = data.setting_value;
-  const n = Number(raw);
-  return Number.isFinite(n) ? n : 15;
+  return Array.from(map.values());
 }
+
+function mergeSmallCraftFamiliesWithNameFallback(craftFamilies, items) {
+  const byId = new Map();
+  const used = new Set();
+  const result = [];
+
+  craftFamilies.forEach((family) => {
+    if (family.length > 1) {
+      family.forEach((v) => used.add(v.id));
+      result.push(family);
+    }
+  });
+
+  items.forEach((v) => {
+    if (!used.has(v.id)) {
+      byId.set(v.id, v);
+    }
+  });
+
+  fallbackFamiliesByName(Array.from(byId.values())).forEach((family) => {
+    result.push(family);
+  });
+
+  return result;
+}
+
+function familyLevel(v, allInFamily, memo = {}) {
+  const key = vehicleKey(v);
+
+  if (memo[key] != null) return memo[key];
+
+  const parents = allInFamily.filter((candidate) => {
+    if (candidate.id === v.id) return false;
+    return craftDependsOn(key, vehicleKey(candidate));
+  });
+
+  if (!parents.length) {
+    memo[key] = 0;
+    return 0;
+  }
+
+  memo[key] =
+    1 +
+    Math.max(
+      ...parents.map((parent) => familyLevel(parent, allInFamily, memo))
+    );
+
+  return memo[key];
+}
+
+function sortFamilyVariants(list) {
+  const memo = {};
+
+  return list.slice().sort((a, b) => {
+    const la = familyLevel(a, list, memo);
+    const lb = familyLevel(b, list, memo);
+
+    return (
+      la - lb ||
+      Number(a.sort_order || 1000) - Number(b.sort_order || 1000) ||
+      String(a.display_name || "").localeCompare(String(b.display_name || ""), "de")
+    );
+  });
+}
+
+function getBaseVariant(sorted) {
+  if (!sorted.length) return null;
+
+  const withLevel = sorted.map((v) => ({
+    v,
+    level: familyLevel(v, sorted, {})
+  }));
+
+  withLevel.sort((a, b) => {
+    return (
+      a.level - b.level ||
+      Number(a.v.sort_order || 1000) - Number(b.v.sort_order || 1000) ||
+      String(a.v.display_name || "").localeCompare(String(b.v.display_name || ""), "de")
+    );
+  });
+
+  return withLevel[0].v;
+}
+
+function buildOrderFamilies() {
+  const byGroup = new Map();
+
+  orderVehiclesCache.forEach((v) => {
+    const g = v.group_name || "Ohne Gruppe";
+    if (!byGroup.has(g)) byGroup.set(g, []);
+    byGroup.get(g).push(v);
+  });
+
+  const families = [];
+
+  for (const [, items] of byGroup) {
+    const craftFamilies = connectedFamiliesByCraft(items);
+    const mergedFamilies = mergeSmallCraftFamiliesWithNameFallback(craftFamilies, items);
+
+    mergedFamilies.forEach((list) => {
+      const variants = sortFamilyVariants(list);
+      const base = getBaseVariant(variants) || variants[0];
+
+      families.push({
+        base,
+        variants
+      });
+    });
+  }
+
+  return families;
+}
+
+function getUpgradePath(family, selected) {
+  const path = family.variants
+    .filter((v) => {
+      if (v.id === selected.id) return true;
+      return craftDependsOn(vehicleKey(selected), vehicleKey(v));
+    })
+    .sort((a, b) => {
+      return (
+        familyLevel(a, family.variants, {}) - familyLevel(b, family.variants, {}) ||
+        Number(a.sort_order || 1000) - Number(b.sort_order || 1000)
+      );
+    });
+
+  return path.length ? path : [selected];
+}
+
+function getFamilyForVehicle(vehicleId) {
+  return orderFamiliesCache.find((family) =>
+    family.variants.some((v) => String(v.id) === String(vehicleId))
+  ) || null;
+}
+
+function getVehicleById(vehicleId) {
+  return orderVehiclesCache.find((v) => String(v.id) === String(vehicleId)) || null;
+}
+
+function getResourceById(itemId) {
+  return orderResourcesCache.find((x) => String(x.item_id) === String(itemId)) || null;
+}
+
+/* =========================================================
+   LOGIN / BASISDATEN
+========================================================= */
 
 async function requireLogin() {
   const { data, error } = await window.lfcSupabase.auth.getUser();
@@ -326,8 +722,41 @@ async function requireLogin() {
   return true;
 }
 
+async function loadVehicleGroups() {
+  const { data, error } = await window.lfcSupabase
+    .from("vehicle_groups")
+    .select("id,name,sort_order,is_active")
+    .order("sort_order", { ascending: true })
+    .order("name", { ascending: true });
+
+  if (error) throw error;
+  vehicleGroupsCache = data || [];
+}
+
+async function loadOrderData() {
+  const [vehiclesRes, resourcesRes] = await Promise.all([
+    window.lfcSupabase
+      .from("public_vehicle_catalog")
+      .select("*"),
+    window.lfcSupabase
+      .from("public_item_prices")
+      .select("*")
+      .order("sort_order", { ascending: true })
+      .order("item_name", { ascending: true })
+  ]);
+
+  if (vehiclesRes.error) throw vehiclesRes.error;
+  if (resourcesRes.error) throw resourcesRes.error;
+
+  orderVehiclesCache = (vehiclesRes.data || []).filter((v) => v.group_name);
+  orderResourcesCache = resourcesRes.data || [];
+
+  await loadCraftDependencies();
+  orderFamiliesCache = buildOrderFamilies();
+}
+
 /* =========================================================
-   KATALOG
+   KATALOG-VERWALTUNG
 ========================================================= */
 
 async function loadVehicles() {
@@ -386,7 +815,6 @@ async function loadVehicles() {
                   <div class="small">${escHtml(v.craft_key)}</div>
                   <div class="small">Anzeigename / Katalogtitel</div>
                   ${input(v.display_name || "", "display_name")}
-                  <div class="small">Dieser Anzeigename wird im öffentlichen Katalog als <strong>shop-card-title</strong> verwendet.</div>
                   <div class="small">Bauplan</div>
                   ${input(v.blueprint_name || "", "blueprint_name")}
                 </td>
@@ -394,7 +822,6 @@ async function loadVehicles() {
                 <td>
                   <div class="small">Gruppe</div>
                   <select class="input" data-name="group_id">${renderGroupOptions(v.group_id)}</select>
-                  <div class="small">Fahrzeuge ohne Gruppe werden im öffentlichen Katalog nicht angezeigt.</div>
                 </td>
 
                 <td>
@@ -415,7 +842,7 @@ async function loadVehicles() {
                 <td>${input(v.trunk_size || "", "trunk_size")}</td>
 
                 <td class="img-editor">
-                  <div class="small">Bild-URLs, eine URL pro Zeile.<br>Nur https:// Links sind gültig.<br>Erstes Bild = Hauptbild.</div>
+                  <div class="small">Bild-URLs, eine URL pro Zeile. Nur https:// Links.</div>
                   <textarea class="input imageUrls" data-name="_image_urls">${escHtml(imageText)}</textarea>
                   <div class="imagePreview">${renderImagePreview(imageText)}</div>
                 </td>
@@ -487,7 +914,7 @@ async function saveVehicle(e) {
   const invalidImageLines = rawImageLines.filter((url) => !/^https:\/\//i.test(url));
 
   if (invalidImageLines.length) {
-    alert("Es sind ungültige Bildlinks vorhanden.\n\nErlaubt sind nur Links, die mit https:// beginnen.\n\n" + invalidImageLines.join("\n"));
+    alert("Es sind ungültige Bildlinks vorhanden. Erlaubt sind nur https:// Links.");
     return;
   }
 
@@ -503,14 +930,11 @@ async function saveVehicle(e) {
       .from("vehicle_catalog_entries")
       .update(vehicleUpdate)
       .eq("id", id)
-      .select("id, display_name, group_id")
+      .select("id")
       .maybeSingle();
 
     if (vehicleError) throw vehicleError;
-
-    if (!updatedRows) {
-      throw new Error("Fahrzeug wurde nicht aktualisiert. Wahrscheinlich blockiert RLS die Änderung oder die ID wurde nicht gefunden.");
-    }
+    if (!updatedRows) throw new Error("Fahrzeug wurde nicht aktualisiert.");
 
     const { error: deleteImagesError } = await window.lfcSupabase
       .from("vehicle_images")
@@ -534,15 +958,233 @@ async function saveVehicle(e) {
       if (insertImagesError) throw insertImagesError;
     }
 
-    setAdminStatus("✅ Fahrzeug, Gruppe und Bilder gespeichert.");
+    setAdminStatus("✅ Fahrzeug gespeichert.", "ok");
     updateImagePreview(tr);
   } catch (error) {
     console.error(error);
     alert(error.message || String(error));
-    setAdminStatus("❌ Fehler beim Speichern.");
+    setAdminStatus("❌ Fehler beim Speichern.", "err");
   } finally {
     saveButton.disabled = false;
     saveButton.textContent = "Speichern";
+  }
+}
+
+/* =========================================================
+   ROHSTOFFPREISE TAB
+========================================================= */
+
+async function loadItemPricesAdmin() {
+  const c = document.getElementById("content");
+  c.innerHTML = "Lade Rohstoffpreise…";
+  setAdminStatus("");
+
+  if (!canAccessRole("manager")) {
+    c.textContent = "Kein Zugriff.";
+    return;
+  }
+
+  try {
+    const { data, error } = await window.lfcSupabase
+      .from("items")
+      .select(`
+        id,
+        name,
+        unit,
+        is_active,
+        sort_order,
+        item_prices (
+          id,
+          price,
+          currency,
+          is_active,
+          updated_at
+        )
+      `)
+      .order("sort_order", { ascending: true })
+      .order("name", { ascending: true });
+
+    if (error) throw error;
+
+    c.innerHTML = `
+      <section class="bt-card">
+        <h2>Rohstoffpreise</h2>
+        <p class="bt-hint">
+          Diese Preise werden auf <strong>rohstoffpreise.html</strong> und bei <strong>Neuer Auftrag → Rohstoffe</strong> verwendet.
+        </p>
+
+        <form id="newItemForm" class="price-grid">
+          <div class="shop-field">
+            <label>Neuer Artikel</label>
+            <input class="input" id="newItemName" required placeholder="z.B. Kupferbarren">
+          </div>
+
+          <div class="shop-field">
+            <label>Einheit</label>
+            <input class="input" id="newItemUnit" value="Stk.">
+          </div>
+
+          <div class="shop-field">
+            <label>Preis</label>
+            <input class="input" id="newItemPrice" type="number" min="0" step="1" value="0">
+          </div>
+
+          <div>
+            <button class="btn" type="submit">Artikel anlegen</button>
+          </div>
+        </form>
+      </section>
+
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>Sortierung</th>
+            <th>Artikel</th>
+            <th>Einheit</th>
+            <th>Preis</th>
+            <th>Aktiv</th>
+            <th>Aktion</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${(data || []).map((item) => {
+            const price = (item.item_prices || [])[0] || {};
+            return `
+              <tr data-item-id="${escHtml(item.id)}" data-price-id="${escHtml(price.id || "")}">
+                <td>${input(item.sort_order ?? 1000, "sort_order", "number")}</td>
+                <td>${input(item.name || "", "name")}</td>
+                <td>${input(item.unit || "Stk.", "unit")}</td>
+                <td>${input(price.price ?? 0, "price", "number")}</td>
+                <td>
+                  <label class="small">
+                    <input data-name="is_active" type="checkbox" ${item.is_active ? "checked" : ""}>
+                    aktiv
+                  </label>
+                </td>
+                <td>
+                  <button class="btn saveItemPrice" type="button">Speichern</button>
+                </td>
+              </tr>
+            `;
+          }).join("")}
+        </tbody>
+      </table>
+    `;
+
+    document.getElementById("newItemForm").addEventListener("submit", createItemPrice);
+    document.querySelectorAll(".saveItemPrice").forEach((btn) => btn.onclick = saveItemPrice);
+  } catch (error) {
+    console.error(error);
+    c.textContent = "Fehler: " + (error.message || String(error));
+  }
+}
+
+async function createItemPrice(e) {
+  e.preventDefault();
+
+  const name = document.getElementById("newItemName").value.trim();
+  const unit = document.getElementById("newItemUnit").value.trim() || "Stk.";
+  const price = Number(document.getElementById("newItemPrice").value || 0);
+
+  if (!name) {
+    alert("Bitte Artikelname eintragen.");
+    return;
+  }
+
+  try {
+    const { data: item, error: itemError } = await window.lfcSupabase
+      .from("items")
+      .insert({
+        name,
+        unit,
+        is_active: true,
+        sort_order: 1000
+      })
+      .select("id")
+      .single();
+
+    if (itemError) throw itemError;
+
+    const { error: priceError } = await window.lfcSupabase
+      .from("item_prices")
+      .insert({
+        item_id: item.id,
+        price,
+        currency: "EUR",
+        is_active: true
+      });
+
+    if (priceError) throw priceError;
+
+    setAdminStatus("✅ Artikel angelegt.", "ok");
+    await loadItemPricesAdmin();
+  } catch (error) {
+    console.error(error);
+    alert(error.message || String(error));
+    setAdminStatus("❌ Artikel konnte nicht angelegt werden.", "err");
+  }
+}
+
+async function saveItemPrice(e) {
+  const tr = e.target.closest("tr");
+  const itemId = tr.dataset.itemId;
+  const priceId = tr.dataset.priceId || "";
+
+  const name = tr.querySelector('[data-name="name"]').value.trim();
+  const unit = tr.querySelector('[data-name="unit"]').value.trim() || "Stk.";
+  const sortOrder = Number(tr.querySelector('[data-name="sort_order"]').value || 1000);
+  const price = Number(tr.querySelector('[data-name="price"]').value || 0);
+  const isActive = tr.querySelector('[data-name="is_active"]').checked;
+
+  const btn = e.target;
+  btn.disabled = true;
+  btn.textContent = "Speichere…";
+
+  try {
+    const { error: itemError } = await window.lfcSupabase
+      .from("items")
+      .update({
+        name,
+        unit,
+        sort_order: sortOrder,
+        is_active: isActive
+      })
+      .eq("id", itemId);
+
+    if (itemError) throw itemError;
+
+    if (priceId) {
+      const { error: priceError } = await window.lfcSupabase
+        .from("item_prices")
+        .update({
+          price,
+          currency: "EUR",
+          is_active: isActive
+        })
+        .eq("id", priceId);
+
+      if (priceError) throw priceError;
+    } else {
+      const { error: priceError } = await window.lfcSupabase
+        .from("item_prices")
+        .insert({
+          item_id: itemId,
+          price,
+          currency: "EUR",
+          is_active: isActive
+        });
+
+      if (priceError) throw priceError;
+    }
+
+    setAdminStatus("✅ Rohstoffpreis gespeichert.", "ok");
+  } catch (error) {
+    console.error(error);
+    alert(error.message || String(error));
+    setAdminStatus("❌ Fehler beim Speichern.", "err");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Speichern";
   }
 }
 
@@ -556,7 +1198,7 @@ async function loadNewOrder() {
   setAdminStatus("");
 
   try {
-    await loadOrderProducts();
+    await loadOrderData();
 
     c.innerHTML = `
       <section class="bt-card order-create-card">
@@ -570,27 +1212,32 @@ async function loadNewOrder() {
             </div>
 
             <div class="shop-field">
-              <label>Auftragsart</label>
-              <select class="input" id="newOrderType">
-                <option value="new">Neuwagen</option>
-                <option value="upgrade">Upgrade</option>
+              <label for="newOrderType">Was wird bestellt? *</label>
+              <select class="input" id="newOrderType" required>
+                <option value="new_vehicle">Neuwagen</option>
+                <option value="vehicle_upgrade">Upgrade eines Fahrzeuges</option>
+                <option value="resources">Rohstoffe</option>
+                <option value="backpack">Rucksack</option>
               </select>
             </div>
+          </div>
 
-            <div class="shop-field">
-              <label for="newOrderProductSearch">Was wird hergestellt? *</label>
-              <input class="input" id="newOrderProductSearch" list="orderProductList" required placeholder="Auswahl suchen…">
-              <datalist id="orderProductList"></datalist>
-              <div class="small" id="newOrderProductInfo">Bitte Auswahl treffen.</div>
+          <div class="order-product-row">
+            <div id="newOrderProductArea"></div>
+
+            <div class="order-preview-img" id="newOrderPreviewImage">
+              Kein Bild
             </div>
+          </div>
+
+          <div class="order-summary" id="newOrderSummary">
+            Bitte Auswahl treffen.
           </div>
 
           <div class="shop-field">
             <label for="newOrderPublicInfo">Zusätzliche Infos</label>
-            <textarea class="input" id="newOrderPublicInfo" placeholder="Zusätzliche Infos für die öffentliche Bestellübersicht"></textarea>
+            <textarea class="input" id="newOrderPublicInfo" placeholder="Zusätzliche Infos"></textarea>
           </div>
-
-          <div class="bt-hint" id="newOrderSummary">Noch keine Auswahl getroffen.</div>
 
           <div class="shop-form-actions">
             <button class="btn" id="newOrderSubmit" type="submit">Auftrag erstellen</button>
@@ -599,73 +1246,254 @@ async function loadNewOrder() {
       </section>
     `;
 
-    document.getElementById("newOrderType").addEventListener("change", refreshNewOrderOptions);
-    document.getElementById("newOrderProductSearch").addEventListener("input", updateNewOrderSummary);
+    document.getElementById("newOrderType").addEventListener("change", renderNewOrderProductArea);
     document.getElementById("newOrderForm").addEventListener("submit", submitNewOrder);
 
-    refreshNewOrderOptions();
+    renderNewOrderProductArea();
   } catch (error) {
     console.error(error);
     c.textContent = "Fehler: " + (error.message || String(error));
   }
 }
 
-function currentNewOrderList() {
-  const type = document.getElementById("newOrderType")?.value || "new";
-  return type === "upgrade" ? orderUpgradeCache : orderProductsCache;
+function vehicleOptionLabel(v) {
+  return `${v.display_name} (${euro(v.price)})`;
 }
 
-function refreshNewOrderOptions() {
-  const list = currentNewOrderList();
-  const datalist = document.getElementById("orderProductList");
-  const search = document.getElementById("newOrderProductSearch");
+function getNewVehicleOptions() {
+  return orderVehiclesCache
+    .filter((v) => !isRucksackVehicle(v))
+    .slice()
+    .sort((a, b) => String(a.display_name).localeCompare(String(b.display_name), "de"));
+}
 
-  if (search) search.value = "";
+function getUpgradeVehicleOptions() {
+  return orderVehiclesCache
+    .filter((v) => {
+      if (isRucksackVehicle(v)) return false;
+      const family = getFamilyForVehicle(v.id);
+      if (!family) return false;
+      const path = getUpgradePath(family, v);
+      return path.length > 1;
+    })
+    .slice()
+    .sort((a, b) => String(a.display_name).localeCompare(String(b.display_name), "de"));
+}
 
-  datalist.innerHTML = list.map((p) => {
-    const label = `${p.display_name} (${p.craft_key})`;
-    return `<option value="${escHtml(label)}"></option>`;
-  }).join("");
+function getBackpackOptions() {
+  return orderVehiclesCache
+    .filter((v) => isRucksackVehicle(v))
+    .slice()
+    .sort((a, b) => String(a.display_name).localeCompare(String(b.display_name), "de"));
+}
+
+function renderNewOrderProductArea() {
+  const type = document.getElementById("newOrderType").value;
+  const area = document.getElementById("newOrderProductArea");
+
+  if (type === "new_vehicle") {
+    const options = getNewVehicleOptions();
+
+    area.innerHTML = `
+      <div class="shop-field">
+        <label for="newOrderVehicleSelect">Fertige Produktauswahl: Neuwagen</label>
+        <select class="input" id="newOrderVehicleSelect" required>
+          <option value="">Bitte Fahrzeug wählen</option>
+          ${options.map((v) => `<option value="${escHtml(v.id)}">${escHtml(vehicleOptionLabel(v))}</option>`).join("")}
+        </select>
+        <div class="small">Wenn ein upgegradetes Fahrzeug gewählt wird, werden die darunterliegenden Fahrzeuge automatisch mitberechnet.</div>
+      </div>
+    `;
+
+    document.getElementById("newOrderVehicleSelect").addEventListener("change", updateNewOrderSummary);
+  }
+
+  if (type === "vehicle_upgrade") {
+    const options = getUpgradeVehicleOptions();
+
+    area.innerHTML = `
+      <div class="shop-field">
+        <label for="newOrderVehicleSelect">Fertige Produktauswahl: Upgrade eines Fahrzeuges</label>
+        <select class="input" id="newOrderVehicleSelect" required>
+          <option value="">Bitte Upgrade wählen</option>
+          ${options.map((v) => `<option value="${escHtml(v.id)}">${escHtml(vehicleOptionLabel(v))}</option>`).join("")}
+        </select>
+        <div class="small">Es werden nur Fahrzeuge angezeigt, die ein Upgrade eines bestehenden Fahrzeuges sind.</div>
+      </div>
+    `;
+
+    document.getElementById("newOrderVehicleSelect").addEventListener("change", updateNewOrderSummary);
+  }
+
+  if (type === "resources") {
+    area.innerHTML = `
+      <div class="order-create-grid">
+        <div class="shop-field">
+          <label for="newOrderResourceSelect">Fertige Produktauswahl: Rohstoff</label>
+          <select class="input" id="newOrderResourceSelect" required>
+            <option value="">Bitte Rohstoff wählen</option>
+            ${orderResourcesCache.map((r) => `
+              <option value="${escHtml(r.item_id)}">${escHtml(r.item_name)} (${euro(r.price)} / ${escHtml(r.unit || "Stk.")})</option>
+            `).join("")}
+          </select>
+        </div>
+
+        <div class="shop-field">
+          <label for="newOrderResourceQty">Anzahl</label>
+          <input class="input" id="newOrderResourceQty" type="number" min="1" step="1" value="1" required>
+        </div>
+      </div>
+    `;
+
+    document.getElementById("newOrderResourceSelect").addEventListener("change", updateNewOrderSummary);
+    document.getElementById("newOrderResourceQty").addEventListener("input", updateNewOrderSummary);
+  }
+
+  if (type === "backpack") {
+    const options = getBackpackOptions();
+
+    area.innerHTML = `
+      <div class="shop-field">
+        <label for="newOrderVehicleSelect">Fertige Produktauswahl: Rucksack</label>
+        <select class="input" id="newOrderVehicleSelect" required>
+          <option value="">Bitte Rucksack wählen</option>
+          ${options.map((v) => `<option value="${escHtml(v.id)}">${escHtml(vehicleOptionLabel(v))}</option>`).join("")}
+        </select>
+        <div class="small">Es werden nur Einträge aus der Gruppe Rucksack angezeigt.</div>
+      </div>
+    `;
+
+    document.getElementById("newOrderVehicleSelect").addEventListener("change", updateNewOrderSummary);
+  }
 
   updateNewOrderSummary();
 }
 
-function findSelectedOrderProduct() {
-  const value = String(document.getElementById("newOrderProductSearch")?.value || "").trim();
-  if (!value) return null;
+function setOrderPreviewImage(url) {
+  const box = document.getElementById("newOrderPreviewImage");
+  if (!box) return;
 
-  return currentNewOrderList().find((p) => {
-    const label = `${p.display_name} (${p.craft_key})`;
-    return label === value || p.display_name === value || p.craft_key === value;
-  }) || null;
-}
-
-async function updateNewOrderSummary() {
-  const product = findSelectedOrderProduct();
-  const info = document.getElementById("newOrderProductInfo");
-  const summary = document.getElementById("newOrderSummary");
-  const type = document.getElementById("newOrderType")?.value || "new";
-
-  if (!product) {
-    info.textContent = type === "upgrade" ? "Kein gültiges Upgrade ausgewählt." : "Kein gültiger Neuwagen ausgewählt.";
-    summary.textContent = "Noch keine Auswahl getroffen.";
+  if (!url) {
+    box.innerHTML = "Kein Bild";
     return;
   }
 
-  const depositPercent = await loadDefaultDepositPercent();
-  const total = Number(product.price || 0);
-  const deposit = Math.round(total * (depositPercent / 100));
-  const remaining = calcRemaining(total, false, deposit);
+  box.innerHTML = `<img src="${escHtml(url)}" alt="" loading="lazy" onerror="this.parentElement.textContent='Bild konnte nicht geladen werden'">`;
+}
 
-  info.textContent = `Ausgewählt: ${product.display_name}`;
+function getSelectedOrderData() {
+  const type = document.getElementById("newOrderType")?.value || "new_vehicle";
 
-  summary.innerHTML =
-    `<strong>${escHtml(product.display_name)}</strong><br>` +
-    `Auftragsart: <strong>${type === "upgrade" ? "Upgrade" : "Neuwagen"}</strong><br>` +
-    `Gesamtbetrag: <strong>${escHtml(euro(total))}</strong><br>` +
-    `Anzahlung wird nicht automatisch aktiviert.<br>` +
-    `Möglicher Anzahlungsbetrag (${depositPercent}%): <strong>${escHtml(euro(deposit))}</strong><br>` +
-    `Restbetrag aktuell: <strong>${escHtml(euro(remaining))}</strong>`;
+  if (type === "resources") {
+    const itemId = document.getElementById("newOrderResourceSelect")?.value || "";
+    const qty = Math.max(1, Number(document.getElementById("newOrderResourceQty")?.value || 1));
+    const resource = getResourceById(itemId);
+
+    if (!resource) {
+      return {
+        ok: false,
+        type,
+        total: 0,
+        title: "",
+        items: [],
+        image: "",
+        html: "Bitte Rohstoff auswählen."
+      };
+    }
+
+    const unitPrice = Number(resource.price || 0);
+    const total = unitPrice * qty;
+
+    return {
+      ok: true,
+      type,
+      total,
+      title: `${qty}× ${resource.item_name}`,
+      image: "",
+      items: [{
+        item_type: "resource",
+        item_id: resource.item_id,
+        vehicle_catalog_entry_id: null,
+        title: resource.item_name,
+        quantity: qty,
+        unit_price: unitPrice,
+        total_price: total
+      }],
+      html: `
+        <strong>Typ:</strong> Rohstoffe<br>
+        <strong>Artikel:</strong> ${escHtml(resource.item_name)}<br>
+        <strong>Anzahl:</strong> ${escHtml(qty)} ${escHtml(resource.unit || "Stk.")}<br>
+        <strong>Einzelpreis:</strong> ${euro(unitPrice)}<br>
+        <strong>Gesamtpreis:</strong> ${euro(total)}
+      `
+    };
+  }
+
+  const vehicleId = document.getElementById("newOrderVehicleSelect")?.value || "";
+  const vehicle = getVehicleById(vehicleId);
+
+  if (!vehicle) {
+    return {
+      ok: false,
+      type,
+      total: 0,
+      title: "",
+      items: [],
+      image: "",
+      html: "Bitte Produkt auswählen."
+    };
+  }
+
+  const family = getFamilyForVehicle(vehicle.id);
+  const path = family ? getUpgradePath(family, vehicle) : [vehicle];
+
+  const isUpgrade = type === "vehicle_upgrade";
+  const typeLabel =
+    type === "new_vehicle"
+      ? "Neuwagen"
+      : type === "vehicle_upgrade"
+        ? "Upgrade eines Fahrzeuges"
+        : "Rucksack";
+
+  const total = path.reduce((sum, v) => sum + Number(v.price || 0), 0);
+
+  return {
+    ok: true,
+    type,
+    total,
+    title: vehicle.display_name,
+    image: firstVehicleImage(vehicle),
+    items: path.map((v) => ({
+      item_type: type === "backpack" ? "backpack" : isUpgrade ? "vehicle_upgrade_step" : "vehicle",
+      item_id: null,
+      vehicle_catalog_entry_id: v.id,
+      title: v.display_name,
+      quantity: 1,
+      unit_price: Number(v.price || 0),
+      total_price: Number(v.price || 0)
+    })),
+    html: `
+      <strong>Typ:</strong> ${escHtml(typeLabel)}<br>
+      <strong>Produkt:</strong> ${escHtml(vehicle.display_name)}<br>
+      ${
+        path.length > 1
+          ? `<strong>Berechnete Stufen:</strong><br>${path.map((v) => `→ ${escHtml(v.display_name)} ${euro(v.price)}`).join("<br>")}<br>`
+          : `<strong>Berechnet:</strong> ${escHtml(vehicle.display_name)} ${euro(vehicle.price)}<br>`
+      }
+      <strong>Gesamtpreis:</strong> ${euro(total)}
+    `
+  };
+}
+
+function updateNewOrderSummary() {
+  const data = getSelectedOrderData();
+  const summary = document.getElementById("newOrderSummary");
+
+  setOrderPreviewImage(data.image);
+
+  if (summary) {
+    summary.innerHTML = data.html;
+  }
 }
 
 async function submitNewOrder(e) {
@@ -673,16 +1501,15 @@ async function submitNewOrder(e) {
 
   const customerName = document.getElementById("newOrderCustomerName").value.trim();
   const publicInfo = document.getElementById("newOrderPublicInfo").value.trim();
-  const product = findSelectedOrderProduct();
-  const type = document.getElementById("newOrderType")?.value || "new";
+  const selected = getSelectedOrderData();
 
   if (!customerName) {
     alert("Bitte Kundenname eintragen.");
     return;
   }
 
-  if (!product) {
-    alert("Bitte eine gültige Auswahl treffen.");
+  if (!selected.ok) {
+    alert("Bitte eine gültige Produktauswahl treffen.");
     return;
   }
 
@@ -692,32 +1519,23 @@ async function submitNewOrder(e) {
   setAdminStatus("");
 
   try {
-    const depositPercent = await loadDefaultDepositPercent();
-    const total = Number(product.price || 0);
-    const deposit = Math.round(total * (depositPercent / 100));
-    const depositRequired = false;
-    const remaining = calcRemaining(total, depositRequired, deposit);
+    const total = Number(selected.total || 0);
     const orderNumber = generateOrderNumber();
-
-    const productionSummary =
-      type === "upgrade"
-        ? "Upgrade: " + product.display_name
-        : product.display_name;
 
     const { data: order, error: orderError } = await window.lfcSupabase
       .from("orders")
       .insert({
         order_number: orderNumber,
         customer_name: customerName,
-        production_summary: productionSummary,
+        production_summary: selected.title,
         status: "new",
         public_status_label: "Bestellung ist eingegangen",
         public_info: publicInfo,
         total_price: total,
         invoice_total: total,
-        deposit_required: depositRequired,
-        deposit_amount: deposit,
-        invoice_remaining: remaining,
+        deposit_required: false,
+        deposit_amount: 0,
+        invoice_remaining: total,
         invoice_paid: false,
         admin_hidden: false,
         source: "admin"
@@ -727,21 +1545,24 @@ async function submitNewOrder(e) {
 
     if (orderError) throw orderError;
 
+    const orderItems = selected.items.map((item) => ({
+      order_id: order.id,
+      item_type: item.item_type,
+      item_id: item.item_id,
+      vehicle_catalog_entry_id: item.vehicle_catalog_entry_id,
+      title: item.title,
+      quantity: item.quantity,
+      unit_price: item.unit_price,
+      total_price: item.total_price
+    }));
+
     const { error: itemError } = await window.lfcSupabase
       .from("order_items")
-      .insert({
-        order_id: order.id,
-        item_type: type === "upgrade" ? "vehicle_upgrade" : "vehicle",
-        vehicle_catalog_entry_id: product.id,
-        title: productionSummary,
-        quantity: 1,
-        unit_price: total,
-        total_price: total
-      });
+      .insert(orderItems);
 
     if (itemError) throw itemError;
 
-    setAdminStatus("✅ Auftrag erstellt: " + order.order_number);
+    setAdminStatus("✅ Auftrag erstellt: " + order.order_number, "ok");
 
     currentTab = "openOrders";
     document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
@@ -752,7 +1573,7 @@ async function submitNewOrder(e) {
   } catch (error) {
     console.error(error);
     alert(error.message || String(error));
-    setAdminStatus("❌ Auftrag konnte nicht erstellt werden.");
+    setAdminStatus("❌ Auftrag konnte nicht erstellt werden.", "err");
   } finally {
     submitButton.disabled = false;
     submitButton.textContent = "Auftrag erstellen";
@@ -777,6 +1598,36 @@ function orderItemsSummary(order) {
     })
     .filter(Boolean)
     .join(", ");
+}
+
+function recalcOrderRowRemaining(tr) {
+  if (!tr) return;
+
+  const invoiceTotalEl = tr.querySelector('[data-name="invoice_total"]');
+  const depositRequiredEl = tr.querySelector('[data-name="deposit_required"]');
+  const depositAmountEl = tr.querySelector('[data-name="deposit_amount"]');
+  const remainingEl = tr.querySelector('[data-role="invoice_remaining_display"]');
+
+  if (!remainingEl) return;
+
+  const invoiceTotal = invoiceTotalEl ? Number(invoiceTotalEl.value || 0) : Number(tr.dataset.invoiceTotal || 0);
+  const depositRequired = depositRequiredEl ? depositRequiredEl.checked : String(tr.dataset.depositRequired || "false") === "true";
+  const depositAmount = depositAmountEl ? Number(depositAmountEl.value || 0) : Number(tr.dataset.depositAmount || 0);
+
+  remainingEl.textContent = euro(calcRemaining(invoiceTotal, depositRequired, depositAmount));
+}
+
+function bindOrderCalculationEvents() {
+  document.querySelectorAll(".orders-table tbody tr").forEach((tr) => {
+    ["invoice_total", "deposit_amount", "deposit_required"].forEach((name) => {
+      const el = tr.querySelector(`[data-name="${name}"]`);
+      if (!el) return;
+      el.addEventListener("input", () => recalcOrderRowRemaining(tr));
+      el.addEventListener("change", () => recalcOrderRowRemaining(tr));
+    });
+
+    recalcOrderRowRemaining(tr);
+  });
 }
 
 function buildOrdersTable(data, mode) {
@@ -887,13 +1738,9 @@ async function loadOrdersByMode(mode) {
       .order("created_at", { ascending: false });
 
     if (isFinishedMode) {
-      query = query
-        .eq("invoice_paid", true)
-        .eq("admin_hidden", false);
+      query = query.eq("invoice_paid", true).eq("admin_hidden", false);
     } else {
-      query = query
-        .eq("invoice_paid", false)
-        .eq("admin_hidden", false);
+      query = query.eq("invoice_paid", false).eq("admin_hidden", false);
     }
 
     const { data, error } = await query.limit(500);
@@ -976,11 +1823,11 @@ async function saveOrder(e) {
     if (error) throw error;
     if (!data) throw new Error("Auftrag wurde nicht aktualisiert. Prüfe RLS/Rechte.");
 
-    setAdminStatus("✅ Auftrag gespeichert: " + data.order_number);
+    setAdminStatus("✅ Auftrag gespeichert: " + data.order_number, "ok");
 
-    if (currentTab === "openOrders" && FINISHED_STATUSES.includes(data.status)) {
+    if (currentTab === "openOrders" && data.invoice_paid === true) {
       await loadOrdersByMode("open");
-    } else if (currentTab === "finishedOrders" && !FINISHED_STATUSES.includes(data.status)) {
+    } else if (currentTab === "finishedOrders" && data.invoice_paid === false) {
       await loadOrdersByMode("finished");
     } else {
       recalcOrderRowRemaining(tr);
@@ -988,7 +1835,7 @@ async function saveOrder(e) {
   } catch (error) {
     console.error(error);
     alert(error.message || String(error));
-    setAdminStatus("❌ Fehler beim Speichern des Auftrags.");
+    setAdminStatus("❌ Fehler beim Speichern des Auftrags.", "err");
   } finally {
     saveButton.disabled = false;
     saveButton.textContent = "Speichern";
@@ -1020,14 +1867,14 @@ async function hideFinishedOrder(e) {
       .maybeSingle();
 
     if (error) throw error;
-    if (!data) throw new Error("Auftrag konnte nicht ausgeblendet werden. Prüfe RLS/Rechte.");
+    if (!data) throw new Error("Auftrag konnte nicht ausgeblendet werden.");
 
-    setAdminStatus("✅ Auftrag ausgeblendet: " + data.order_number);
+    setAdminStatus("✅ Auftrag ausgeblendet: " + data.order_number, "ok");
     tr.remove();
   } catch (error) {
     console.error(error);
     alert(error.message || String(error));
-    setAdminStatus("❌ Fehler beim Ausblenden.");
+    setAdminStatus("❌ Fehler beim Ausblenden.", "err");
   } finally {
     btn.disabled = false;
     btn.textContent = "Ausblenden";
@@ -1035,7 +1882,7 @@ async function hideFinishedOrder(e) {
 }
 
 /* =========================================================
-   ANFRAGEN
+   ANFRAGEN / TERMINE
 ========================================================= */
 
 async function loadContacts() {
@@ -1094,10 +1941,6 @@ async function saveContactResponsible(e) {
   const id = tr.dataset.id;
   const responsibleText = tr.querySelector('[data-name="responsible_text"]').value;
 
-  const btn = e.target;
-  btn.disabled = true;
-  btn.textContent = "Speichere…";
-
   try {
     const { error } = await window.lfcSupabase
       .from("contact_requests")
@@ -1106,13 +1949,10 @@ async function saveContactResponsible(e) {
 
     if (error) throw error;
 
-    setAdminStatus("✅ Anfrage gespeichert.");
+    setAdminStatus("✅ Anfrage gespeichert.", "ok");
   } catch (error) {
     alert(error.message || String(error));
-    setAdminStatus("❌ Fehler beim Speichern.");
-  } finally {
-    btn.disabled = false;
-    btn.textContent = "Speichern";
+    setAdminStatus("❌ Fehler beim Speichern.", "err");
   }
 }
 
@@ -1131,13 +1971,9 @@ async function hideContactRequest(e) {
     alert(error.message);
   } else {
     tr.remove();
-    setAdminStatus("✅ Anfrage ausgeblendet.");
+    setAdminStatus("✅ Anfrage ausgeblendet.", "ok");
   }
 }
-
-/* =========================================================
-   TERMINE
-========================================================= */
 
 async function loadAppointments() {
   const c = document.getElementById("content");
@@ -1198,10 +2034,6 @@ async function saveAppointmentResponsible(e) {
   const id = tr.dataset.id;
   const responsibleText = tr.querySelector('[data-name="responsible_text"]').value;
 
-  const btn = e.target;
-  btn.disabled = true;
-  btn.textContent = "Speichere…";
-
   try {
     const { error } = await window.lfcSupabase
       .from("appointment_requests")
@@ -1210,13 +2042,10 @@ async function saveAppointmentResponsible(e) {
 
     if (error) throw error;
 
-    setAdminStatus("✅ Termin gespeichert.");
+    setAdminStatus("✅ Termin gespeichert.", "ok");
   } catch (error) {
     alert(error.message || String(error));
-    setAdminStatus("❌ Fehler beim Speichern.");
-  } finally {
-    btn.disabled = false;
-    btn.textContent = "Speichern";
+    setAdminStatus("❌ Fehler beim Speichern.", "err");
   }
 }
 
@@ -1235,7 +2064,7 @@ async function hideAppointmentRequest(e) {
     alert(error.message);
   } else {
     tr.remove();
-    setAdminStatus("✅ Terminanfrage ausgeblendet.");
+    setAdminStatus("✅ Terminanfrage ausgeblendet.", "ok");
   }
 }
 
@@ -1401,11 +2230,6 @@ async function createUserFromSettings(e) {
   const displayName = document.getElementById("newUserName").value.trim();
   const role = document.getElementById("newUserRole").value;
 
-  if (!email || !password) {
-    alert("Bitte E-Mail und Passwort eintragen.");
-    return;
-  }
-
   const { data: sessionData } = await window.lfcSupabase.auth.getSession();
   const token = sessionData?.session?.access_token;
 
@@ -1435,11 +2259,11 @@ async function createUserFromSettings(e) {
       throw new Error(body.error || "Benutzer konnte nicht angelegt werden.");
     }
 
-    setAdminStatus("✅ Mitarbeiter angelegt.");
+    setAdminStatus("✅ Mitarbeiter angelegt.", "ok");
     loadSettings();
   } catch (error) {
     alert(error.message || String(error));
-    setAdminStatus("❌ Mitarbeiter konnte nicht angelegt werden.");
+    setAdminStatus("❌ Mitarbeiter konnte nicht angelegt werden.", "err");
   }
 }
 
@@ -1461,7 +2285,7 @@ async function saveProfile(e) {
   if (error) {
     alert(error.message);
   } else {
-    setAdminStatus("✅ Mitarbeiter gespeichert.");
+    setAdminStatus("✅ Mitarbeiter gespeichert.", "ok");
   }
 }
 
@@ -1469,6 +2293,7 @@ async function saveCalendarSettings(e) {
   e.preventDefault();
 
   const days = {};
+
   document.querySelectorAll("#calendarSettingsForm tr[data-day]").forEach((tr) => {
     const key = tr.dataset.day;
     days[key] = {
@@ -1491,7 +2316,7 @@ async function saveCalendarSettings(e) {
   if (error) {
     alert(error.message);
   } else {
-    setAdminStatus("✅ Kalender-Einstellungen gespeichert.");
+    setAdminStatus("✅ Kalender-Einstellungen gespeichert.", "ok");
   }
 }
 
@@ -1501,6 +2326,7 @@ async function saveCalendarSettings(e) {
 
 async function loadTab() {
   if (currentTab === "vehicles") return loadVehicles();
+  if (currentTab === "itemPrices") return loadItemPricesAdmin();
   if (currentTab === "newOrder") return loadNewOrder();
   if (currentTab === "openOrders") return loadOrdersByMode("open");
   if (currentTab === "finishedOrders") return loadOrdersByMode("finished");
