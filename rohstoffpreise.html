@@ -1,1 +1,137 @@
-<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>LFC – Rohstoffpreise</title><link rel="icon" href="lfc.favicon.ico"><link rel="stylesheet" href="assets/css/lfc.background.css"><link rel="stylesheet" href="assets/css/lfc.css"><script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script defer src="assets/js/config.js"></script><script defer src="assets/js/supabase-client.js"></script><script defer src="assets/js/lfc.background.js"></script><script defer src="assets/js/common.js"></script><script defer src="assets/js/rohstoffpreise.js"></script><style>.bt-page{max-width:1200px;margin:0 auto;padding:18px 14px 30px}.toolbar{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin:12px 0}.toolbar input{flex:1 1 260px;min-width:220px;padding:10px 12px;border:1px solid rgba(255,255,255,.14);background:rgba(0,0,0,.18);color:inherit}.tablewrap{overflow:auto}.data-table{width:100%;border-collapse:collapse;min-width:520px}.data-table th,.data-table td{padding:10px;border-bottom:1px solid rgba(255,255,255,.1);text-align:left}</style></head><body><div id="bt-glow-orbits"></div><div id="bt-points"></div><header id="bt-navbar" class="bt-header"></header><main class="bt-page"><section class="bt-card"><div class="bt-pill"><span class="bt-pill-dot"></span><span>Rohstoffpreise</span></div><h1>Rohstoffpreise</h1><p class="bt-text-muted">Übersicht der aktuellen Rohstoffpreise. 15% Anzahlung auf die Gesamtkosten.</p><div class="toolbar"><input id="search" type="search" placeholder="Suchen…"><span id="countPill" class="bt-pill">0 Treffer</span></div><div id="status" class="bt-hint">Lade Daten…</div><div class="tablewrap"><table class="data-table"><thead><tr><th>Rohstoff</th><th>Kategorie</th><th>Einheit</th><th>Preis</th></tr></thead><tbody id="tbody"></tbody></table></div></section></main><footer id="bt-footer"></footer></body></html>
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>LFC – Rohstoffpreise</title>
+
+  <link rel="icon" type="image/x-icon" href="lfc.favicon.ico">
+
+  <link rel="stylesheet" href="assets/css/lfc.background.css">
+  <link rel="stylesheet" href="assets/css/lfc.css">
+
+  <script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script defer src="assets/js/config.js"></script>
+  <script defer src="assets/js/supabase-client.js"></script>
+  <script defer src="assets/js/lfc.background.js"></script>
+  <script defer src="assets/js/common.js"></script>
+  <script defer src="assets/js/rohstoffpreise.js"></script>
+
+  <style>
+    .price-page{
+      width:min(980px, calc(100% - 32px));
+      margin:0 auto;
+      padding:34px 0 54px;
+    }
+
+    .price-head{
+      margin-bottom:18px;
+    }
+
+    .price-table{
+      width:100%;
+      border-collapse:collapse;
+      overflow:hidden;
+    }
+
+    .price-table th,
+    .price-table td{
+      padding:12px 10px;
+      border-bottom:1px solid rgba(255,255,255,.09);
+      text-align:left;
+    }
+
+    .price-table th{
+      background:rgba(0,0,0,.24);
+      font-size:12px;
+      text-transform:uppercase;
+      letter-spacing:.06em;
+      opacity:.88;
+    }
+
+    .price-table td:last-child,
+    .price-table th:last-child{
+      text-align:right;
+    }
+
+    .price-filter{
+      display:flex;
+      gap:10px;
+      margin:16px 0;
+    }
+
+    .input{
+      width:100%;
+      box-sizing:border-box;
+      padding:10px 11px;
+      border:1px solid rgba(255,255,255,.14);
+      background:rgba(0,0,0,.18);
+      color:inherit;
+      border-radius:10px;
+      outline:none;
+    }
+
+    .input:focus{
+      border-color:rgba(255,153,0,.55);
+      box-shadow:0 0 0 1px rgba(255,153,0,.14);
+    }
+
+    @media(max-width:700px){
+      .price-page{
+        width:min(720px, calc(100% - 24px));
+      }
+
+      .price-table{
+        font-size:13px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div id="bt-glow-orbits" aria-hidden="true"></div>
+  <div id="bt-points" aria-hidden="true"></div>
+
+  <header id="bt-navbar" class="bt-header"></header>
+
+  <main class="price-page">
+    <section class="bt-hero price-head">
+      <div class="bt-pill">
+        <span class="bt-pill-dot"></span>
+        <span>Rohstoffpreise</span>
+      </div>
+
+      <h1>Aktuelle Rohstoffpreise</h1>
+
+      <p class="bt-lead">
+        Übersicht der aktuell gepflegten Rohstoffpreise aus der LFC Verwaltung.
+      </p>
+    </section>
+
+    <section class="bt-card">
+      <div class="price-filter">
+        <input class="input" id="priceSearch" type="search" placeholder="Rohstoff suchen…">
+      </div>
+
+      <div id="priceStatus" class="bt-hint">Lade Rohstoffpreise…</div>
+
+      <table class="price-table">
+        <thead>
+          <tr>
+            <th>Artikel</th>
+            <th>Einheit</th>
+            <th>Preis</th>
+          </tr>
+        </thead>
+        <tbody id="priceBody">
+          <tr>
+            <td colspan="3">Lade…</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+
+  <footer id="bt-footer"></footer>
+</body>
+</html>
