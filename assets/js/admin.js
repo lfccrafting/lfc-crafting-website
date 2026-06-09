@@ -996,9 +996,7 @@ async function loadItemPricesAdmin() {
         item_prices (
           id,
           price,
-          currency,
-          is_active,
-          updated_at
+          is_active
         )
       `)
       .order("sort_order", { ascending: true })
@@ -1110,7 +1108,6 @@ async function createItemPrice(e) {
       .insert({
         item_id: item.id,
         price,
-        currency: "EUR",
         is_active: true
       });
 
@@ -1158,7 +1155,6 @@ async function saveItemPrice(e) {
         .from("item_prices")
         .update({
           price,
-          currency: "EUR",
           is_active: isActive
         })
         .eq("id", priceId);
@@ -1170,7 +1166,6 @@ async function saveItemPrice(e) {
         .insert({
           item_id: itemId,
           price,
-          currency: "EUR",
           is_active: isActive
         });
 
