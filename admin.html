@@ -3,9 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
-  <title>LFC – Verwaltung</title>
+  <title>LFC Verwaltung</title>
 
-  <link rel="icon" href="lfc.favicon.ico">
+  <link rel="icon" type="image/x-icon" href="lfc.favicon.ico">
+
   <link rel="stylesheet" href="assets/css/lfc.background.css">
   <link rel="stylesheet" href="assets/css/lfc.css">
 
@@ -31,32 +32,40 @@
       box-sizing:border-box;
     }
 
+    .admin-head{
+      display:flex;
+      justify-content:space-between;
+      align-items:flex-start;
+      gap:16px;
+      flex-wrap:wrap;
+      margin-bottom:16px;
+    }
+
+    .admin-head h1{
+      margin:8px 0 6px;
+    }
+
     .tabs{
       display:flex;
-      gap:8px;
       flex-wrap:wrap;
+      gap:8px;
       margin:14px 0;
     }
 
     .tab{
-      padding:10px 12px;
-      border:1px solid rgba(255,255,255,.18);
-      background:transparent;
+      border:1px solid rgba(255,255,255,.14);
+      background:rgba(0,0,0,.18);
       color:inherit;
+      padding:10px 13px;
       cursor:pointer;
-      transition:border-color .15s ease,color .15s ease,transform .15s ease;
-    }
-
-    .tab:hover{
-      border-color:rgba(255,153,0,.55);
-      color:var(--accent-2,#ffb347);
-      transform:translateY(-1px);
+      border-radius:999px;
+      font-weight:700;
+      letter-spacing:.03em;
     }
 
     .tab.active{
-      border-color:rgba(255,153,0,.75);
-      color:var(--accent-2,#ffb347);
-      box-shadow:0 0 0 1px rgba(255,153,0,.12);
+      border-color:rgba(255,153,0,.65);
+      background:rgba(255,153,0,.13);
     }
 
     .wrap{
@@ -69,32 +78,28 @@
     .admin-table{
       width:100%;
       border-collapse:collapse;
+      font-size:13px;
     }
 
     .admin-table th,
     .admin-table td{
-      padding:8px;
-      border-bottom:1px solid rgba(255,255,255,.08);
-      text-align:left;
+      border-bottom:1px solid rgba(255,255,255,.09);
+      padding:9px 8px;
       vertical-align:top;
+      text-align:left;
     }
 
     .admin-table th{
+      color:rgba(255,255,255,.88);
+      background:rgba(0,0,0,.25);
       font-size:12px;
-      letter-spacing:.05em;
       text-transform:uppercase;
-      opacity:.9;
+      letter-spacing:.05em;
+      white-space:nowrap;
     }
 
     .admin-table.orders-table{
-      width:100%;
       min-width:1900px;
-      border-collapse:collapse;
-    }
-
-    .admin-table.orders-table thead{
-      position:relative;
-      z-index:50;
     }
 
     .admin-table.orders-table thead th{
@@ -112,10 +117,11 @@
     .input{
       width:100%;
       box-sizing:border-box;
-      padding:8px;
+      padding:9px 10px;
       border:1px solid rgba(255,255,255,.14);
       background:rgba(0,0,0,.18);
       color:inherit;
+      border-radius:10px;
       outline:none;
     }
 
@@ -125,73 +131,103 @@
     }
 
     textarea.input{
-      min-height:80px;
+      min-height:86px;
       resize:vertical;
+    }
+
+    .status-line{
+      min-height:1.4em;
+      margin:8px 0 12px;
+    }
+
+    .status-line.ok,
+    .small.ok{
+      color:#7dffb2;
+    }
+
+    .status-line.err,
+    .small.err{
+      color:#ff8c8c;
     }
 
     .small{
       font-size:12px;
-      opacity:.8;
-      line-height:1.4;
+      opacity:.78;
+      line-height:1.45;
     }
 
     .btn{
-      padding:8px 10px;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      gap:8px;
       border:1px solid rgba(255,255,255,.18);
-      background:transparent;
+      background:rgba(255,153,0,.14);
       color:inherit;
+      padding:9px 12px;
+      border-radius:999px;
       cursor:pointer;
-      margin:2px 0;
-      transition:border-color .15s ease,color .15s ease,transform .15s ease;
+      font-weight:700;
+      text-decoration:none;
+      white-space:nowrap;
     }
 
-    .btn:hover:not(:disabled){
-      border-color:rgba(255,153,0,.55);
-      color:var(--accent-2,#ffb347);
-      transform:translateY(-1px);
-    }
-
-    .btn:disabled{
-      opacity:.6;
-      cursor:wait;
+    .btn:hover{
+      border-color:rgba(255,153,0,.6);
+      background:rgba(255,153,0,.22);
     }
 
     .btn-danger{
-      border-color:rgba(255,80,80,.35);
+      background:rgba(255,80,80,.12);
+      border-color:rgba(255,80,80,.22);
     }
 
-    .btn-danger:hover:not(:disabled){
-      border-color:rgba(255,80,80,.75);
-      color:#ff8c8c;
+    .btn-danger:hover{
+      background:rgba(255,80,80,.2);
+      border-color:rgba(255,80,80,.45);
+    }
+
+    .admin-row-actions{
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
     }
 
     .img-editor{
-      min-width:320px;
-      max-width:460px;
+      min-width:300px;
     }
 
-    .img-editor textarea{
-      min-height:130px;
-      font-family:monospace;
+    .imageUrls{
+      min-height:120px;
+      font-family:ui-monospace, SFMono-Regular, Consolas, monospace;
       font-size:12px;
-      line-height:1.35;
     }
 
     .img-preview{
-      display:flex;
+      display:grid;
+      grid-template-columns:repeat(3, minmax(0, 1fr));
       gap:6px;
-      flex-wrap:wrap;
       margin-top:8px;
-      max-width:440px;
     }
 
     .img-preview-item{
-      width:74px;
-      height:54px;
-      border:1px solid rgba(255,255,255,.14);
-      background:rgba(0,0,0,.25);
-      overflow:hidden;
       position:relative;
+      border:1px solid rgba(255,255,255,.12);
+      background:rgba(255,255,255,.04);
+      aspect-ratio:16/9;
+      overflow:hidden;
+      border-radius:10px;
+    }
+
+    .img-preview-item span{
+      position:absolute;
+      left:6px;
+      top:5px;
+      z-index:2;
+      font-size:11px;
+      background:rgba(0,0,0,.55);
+      padding:2px 5px;
+      border-radius:999px;
     }
 
     .img-preview-item img{
@@ -201,56 +237,66 @@
       display:block;
     }
 
-    .img-preview-item span{
-      position:absolute;
-      left:3px;
-      top:3px;
-      font-size:10px;
-      background:rgba(0,0,0,.75);
-      padding:1px 4px;
-      border:1px solid rgba(255,255,255,.16);
-    }
-
     .img-preview-empty{
-      font-size:12px;
-      opacity:.75;
-      padding:7px 8px;
-      border:1px dashed rgba(255,255,255,.16);
       margin-top:8px;
-    }
-
-    .admin-row-actions{
-      display:grid;
-      gap:6px;
-      min-width:120px;
-    }
-
-    .status-line{
-      margin-top:10px;
-      min-height:1.2em;
-    }
-
-    pre{
-      white-space:pre-wrap;
-      word-break:break-word;
-      margin:0;
-      font-family:monospace;
+      opacity:.65;
       font-size:12px;
     }
 
-    .order-create-card,
-    .settings-card{
-      max-width:1000px;
-      margin:0 auto;
-      display:grid;
-      gap:12px;
+    .order-create-card{
+      max-width:1180px;
     }
 
-    .order-create-grid,
-    .settings-grid{
+    .order-create-grid{
       display:grid;
       grid-template-columns:1fr 1fr;
+      gap:14px;
+      align-items:start;
+    }
+
+    .order-product-row{
+      display:grid;
+      grid-template-columns:minmax(0,1fr) 160px;
+      gap:14px;
+      align-items:start;
+    }
+
+    .order-preview-img{
+      width:160px;
+      aspect-ratio:16/9;
+      border:1px solid rgba(255,255,255,.14);
+      background:rgba(0,0,0,.18);
+      border-radius:14px;
+      overflow:hidden;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      color:rgba(255,255,255,.58);
+      font-size:12px;
+      text-align:center;
+    }
+
+    .order-preview-img img{
+      width:100%;
+      height:100%;
+      object-fit:cover;
+      display:block;
+    }
+
+    .order-summary{
+      padding:14px;
+      border:1px solid rgba(255,255,255,.10);
+      background:rgba(0,0,0,.16);
+      border-radius:16px;
+      line-height:1.55;
+    }
+
+    .settings-grid,
+    .price-grid{
+      display:grid;
+      grid-template-columns:repeat(4, minmax(0,1fr));
       gap:12px;
+      align-items:end;
     }
 
     .shop-field{
@@ -258,22 +304,21 @@
       gap:6px;
     }
 
-    .shop-form{
-      display:grid;
-      gap:12px;
+    .shop-field label{
+      font-size:13px;
+      opacity:.9;
     }
 
-    .shop-form-actions{
-      display:flex;
-      gap:10px;
-      align-items:center;
-      flex-wrap:wrap;
-    }
-
-    @media(max-width:800px){
+    @media(max-width:900px){
       .order-create-grid,
-      .settings-grid{
+      .order-product-row,
+      .settings-grid,
+      .price-grid{
         grid-template-columns:1fr;
+      }
+
+      .order-preview-img{
+        width:100%;
       }
     }
   </style>
@@ -287,17 +332,23 @@
 
   <main class="bt-page">
     <section class="bt-card">
-      <div class="bt-pill">
-        <span class="bt-pill-dot"></span>
-        <span>Verwaltung</span>
+      <div class="admin-head">
+        <div>
+          <div class="bt-pill">
+            <span class="bt-pill-dot"></span>
+            <span>Interner Bereich</span>
+          </div>
+
+          <h1>LFC Verwaltung</h1>
+          <div id="authStatus" class="bt-hint">Prüfe Login…</div>
+        </div>
+
+        <a class="btn" href="login.html">Login / Account</a>
       </div>
 
-      <h1>LFC Verwaltung</h1>
-
-      <div id="authStatus" class="bt-hint">Prüfe Login…</div>
-
-      <div class="tabs">
+      <div class="tabs" aria-label="Verwaltungsbereiche">
         <button class="tab active" data-tab="vehicles" data-min-role="manager">Katalog</button>
+        <button class="tab" data-tab="itemPrices" data-min-role="manager">Rohstoffpreise</button>
         <button class="tab" data-tab="newOrder" data-min-role="employee">Neuer Auftrag</button>
         <button class="tab" data-tab="openOrders" data-min-role="employee">Offene Aufträge</button>
         <button class="tab" data-tab="finishedOrders" data-min-role="manager">Fertige Aufträge</button>
@@ -307,6 +358,7 @@
       </div>
 
       <div id="adminStatus" class="status-line small" aria-live="polite"></div>
+
       <div id="content" class="wrap"></div>
     </section>
   </main>
