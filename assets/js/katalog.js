@@ -2,8 +2,9 @@
   "use strict";
 
   let vehicles = [];
-  let cards = [];
-  let groups = [];
+  let allCards = [];
+  let allGroups = [];
+  let activeFamily = null;
   let activeSelection = null;
 
   let craftDeps = {};
@@ -28,35 +29,55 @@
     });
   }
 
-  function norm(s) {
-    return String(s ?? "")
+  function norm(str) {
+    return String(str ?? "")
       .toLowerCase()
       .normalize("NFD")
       .replace(/[\u0300-\u036f]/g, "")
       .trim();
   }
 
-  function normKey(s) {
-    return String(s ?? "")
+  function normKey(str) {
+    return String(str ?? "")
       .normalize("NFKC")
       .replace(/[\u00A0\u200B\t\n\r]+/g, "")
       .replace(/\s+/g, " ")
       .trim()
+      .replace(/[;:]+$/, "")
       .toLowerCase();
   }
 
-  function slug(s) {
-    return norm(s).replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  function slug(str) {
+    return norm(str)
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "");
   }
 
   function euro(value) {
     const n = Number(value || 0);
+
     return n.toLocaleString("de-DE", {
       style: "currency",
       currency: "EUR",
       minimumFractionDigits: 0,
       maximumFractionDigits: 0
     });
+  }
+
+  function setStatus(message, isError = false) {
+    const el = $("shopStatus");
+    if (!el) return;
+
+    el.textContent = message || "";
+    el.classList.toggle("bt-error", !!isError);
+  }
+
+  function setSearchInfo(message) {
+    const byId = $("shopSearchInfo");
+    const byClass = document.querySelector(".shop-search-info");
+
+    if (byId) byId.textContent = message || "";
+    if (byClass) byClass.textContent = message || "";
   }
 
   function normalizeImageUrl(url) {
@@ -66,23 +87,26 @@
     return s;
   }
 
-  function firstImg(v) {
-    const list = imgs(v);
-    return list[0] || "";
-  }
-
   function imgs(v) {
-    return Array.isArray(v.images)
-      ? v.images.map((x) => normalizeImageUrl(x.url)).filter(Boolean)
-      : [];
+    if (!Array.isArray(v.images)) return [];
+
+    return v.images
+      .slice()
+      .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0))
+      .map((x) => normalizeImageUrl(x.url))
+      .filter(Boolean);
   }
 
-  function groupKey(v) {
-    return v.group_name || "Ohne Gruppe";
+  function firstImg(v) {
+    return imgs(v)[0] || "";
   }
 
   function vehicleKey(v) {
     return normKey(v.craft_key || v.blueprint_name || v.display_name || v.id);
+  }
+
+  function isCraftKey(value) {
+    return /^craft_\d+$/i.test(String(value || "").trim());
   }
 
   function vehicleSearchText(v) {
@@ -94,6 +118,10 @@
       v.craft_key,
       v.trunk_size
     ].join(" "));
+  }
+
+  function groupName(v) {
+    return v.group_name || "Ohne Gruppe";
   }
 
   async function triggerDiscordNotify() {
@@ -115,79 +143,107 @@
     }
   }
 
-  function gvizUrl(sheetName) {
-    return `https://docs.google.com/spreadsheets/d/${encodeURIComponent(CRAFT_SHEET_ID)}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(sheetName)}`;
+  function gvizJSONP(sheetName, timeoutMs = 15000) {
+    return new Promise((resolve, reject) => {
+      const cb =
+        "__lfc_gviz_" +
+        sheetName.replace(/[^a-z0-9]/gi, "_") +
+        "_" +
+        Math.random().toString(36).slice(2);
+
+      const url =
+        "https://docs.google.com/spreadsheets/d/" +
+        encodeURIComponent(CRAFT_SHEET_ID) +
+        "/gviz/tq?tqx=out:json;responseHandler:" +
+        encodeURIComponent(cb) +
+        "&sheet=" +
+        encodeURIComponent(sheetName);
+
+      const script = document.createElement("script");
+
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error("Timeout beim Laden von Sheet: " + sheetName));
+      }, timeoutMs);
+
+      function cleanup() {
+        clearTimeout(timer);
+
+        try {
+          delete window[cb];
+        } catch {}
+
+        if (script.parentNode) {
+          script.parentNode.removeChild(script);
+        }
+      }
+
+      window[cb] = function (payload) {
+        cleanup();
+
+        try {
+          const cols = (payload.table.cols || []).map((c, index) => {
+            const label = String(c.label || c.id || `col_${index}`).trim();
+            return label || `col_${index}`;
+          });
+
+          const rows = (payload.table.rows || []).map((row) => {
+            const obj = {};
+
+            (row.c || []).forEach((cell, index) => {
+              const key = cols[index] || `col_${index}`;
+              obj[key] = cell ? cell.v : "";
+            });
+
+            return obj;
+          });
+
+          resolve(rows);
+        } catch (error) {
+          reject(error);
+        }
+      };
+
+      script.onerror = () => {
+        cleanup();
+        reject(new Error("GViz Fehler beim Laden von Sheet: " + sheetName));
+      };
+
+      script.src = url;
+      document.head.appendChild(script);
+    });
   }
 
-  function parseGvizText(text) {
-    const start = text.indexOf("{");
-    const end = text.lastIndexOf("}");
-
-    if (start < 0 || end < 0) {
-      throw new Error("Ungültige Google-Sheets-GViz-Antwort.");
-    }
-
-    const json = JSON.parse(text.slice(start, end + 1));
-    const cols = (json.table.cols || []).map((c, index) => {
-      const label = String(c.label || c.id || `col_${index}`).trim();
-      return label || `col_${index}`;
-    });
-
-    return (json.table.rows || []).map((row) => {
-      const obj = {};
-
-      (row.c || []).forEach((cell, index) => {
-        const key = cols[index] || `col_${index}`;
-        obj[key] = cell ? cell.v : "";
-      });
-
-      return obj;
-    });
-  }
-
-  async function fetchGvizSheet(sheetName) {
-    const res = await fetch(gvizUrl(sheetName), {
-      cache: "no-store"
-    });
-
-    if (!res.ok) {
-      throw new Error(`Sheet konnte nicht geladen werden: ${sheetName}`);
-    }
-
-    const text = await res.text();
-    return parseGvizText(text);
-  }
-
-  function getRowValue(row, possibleNames) {
+  function getRowValue(row, names) {
     const entries = Object.entries(row || {});
-    const lowered = entries.map(([key, value]) => [normKey(key), value]);
+    const normalized = entries.map(([key, value]) => [normKey(key), value]);
 
-    for (const name of possibleNames) {
+    for (const name of names) {
       const target = normKey(name);
-      const found = lowered.find(([key]) => key === target);
+      const found = normalized.find(([key]) => key === target);
       if (found) return found[1];
     }
 
-    for (const name of possibleNames) {
+    for (const name of names) {
       const target = normKey(name);
-      const found = lowered.find(([key]) => key.includes(target));
+      const found = normalized.find(([key]) => key.includes(target));
       if (found) return found[1];
     }
 
     return "";
   }
 
-  function addDep(fromKey, toKey) {
-    const from = normKey(fromKey);
-    const to = normKey(toKey);
+  function addDependency(productKey, itemKey) {
+    const product = normKey(productKey);
+    const item = normKey(itemKey);
 
-    if (!from || !to || from === to) return;
+    if (!product || !item || product === item) return;
 
-    if (!craftDeps[from]) craftDeps[from] = new Set();
-    if (!craftParents[to]) craftParents[to] = new Set();
+    if (!craftDeps[product]) craftDeps[product] = new Set();
+    if (!craftParents[item]) craftParents[item] = new Set();
 
-    craftDeps[from].add(to);
-    craftParents[to].add(from);
+    craftDeps[product].add(item);
+    craftParents[item].add(product);
   }
 
   async function loadCraftDependencies() {
@@ -196,42 +252,53 @@
     craftLoaded = false;
 
     try {
-      const [recipesRows, itemsRows] = await Promise.all([
-        fetchGvizSheet(TAB_RECIPES),
-        fetchGvizSheet(TAB_RECIPE_ITEMS)
+      const [itemsRows] = await Promise.all([
+        gvizJSONP(TAB_RECIPE_ITEMS),
+        gvizJSONP(TAB_RECIPES).catch(() => [])
       ]);
 
-      const knownVehicleKeys = new Set();
-
-      recipesRows.forEach((row) => {
-        const key =
-          getRowValue(row, ["craft_key", "key", "class", "classname", "recipe", "recipe_key", "name", "item", "result", "output"]) ||
-          "";
-
-        if (key) knownVehicleKeys.add(normKey(key));
-      });
-
-      vehicles.forEach((v) => {
-        knownVehicleKeys.add(vehicleKey(v));
-      });
-
       itemsRows.forEach((row) => {
-        const recipe =
-          getRowValue(row, ["recipe", "recipe_key", "craft_key", "target", "result", "output", "output_key", "result_key"]) ||
-          "";
+        const product =
+          getRowValue(row, [
+            "product",
+            "produkt",
+            "recipe",
+            "recipe_key",
+            "craft_key",
+            "target",
+            "result",
+            "output",
+            "output_key",
+            "result_key"
+          ]) || "";
 
         const item =
-          getRowValue(row, ["item", "item_key", "input", "input_key", "ingredient", "ingredient_key", "source", "source_key", "required_item"]) ||
-          "";
+          getRowValue(row, [
+            "item",
+            "item_key",
+            "input",
+            "input_key",
+            "ingredient",
+            "ingredient_key",
+            "source",
+            "source_key",
+            "required_item"
+          ]) || "";
 
-        const recipeKey = normKey(recipe);
-        const itemKey = normKey(item);
+        const qty =
+          getRowValue(row, [
+            "qty",
+            "quantity",
+            "menge",
+            "amount",
+            "anzahl"
+          ]) || "";
 
-        if (!recipeKey || !itemKey) return;
+        if (!product || !item) return;
 
-        if (knownVehicleKeys.has(recipeKey) && knownVehicleKeys.has(itemKey)) {
-          addDep(itemKey, recipeKey);
-        }
+        if (qty !== "" && Number(qty) === 0) return;
+
+        addDependency(product, item);
       });
 
       craftDeps = Object.fromEntries(
@@ -242,13 +309,39 @@
         Object.entries(craftParents).map(([key, set]) => [key, Array.from(set)])
       );
 
-      craftLoaded = true;
+      craftLoaded = Object.keys(craftDeps).length > 0;
     } catch (error) {
-      console.warn("Upgrade-Daten konnten nicht geladen werden. Katalog läuft ohne Upgrade-Verknüpfung weiter.", error);
+      console.warn("Upgrade-Daten konnten nicht geladen werden. Fallback-Gruppierung wird genutzt.", error);
       craftDeps = {};
       craftParents = {};
       craftLoaded = false;
     }
+  }
+
+  function craftDependsOn(childKey, ancestorKey) {
+    const start = normKey(childKey);
+    const target = normKey(ancestorKey);
+
+    if (!start || !target || start === target) return false;
+
+    const visited = new Set();
+    const stack = [start];
+
+    while (stack.length) {
+      const key = stack.pop();
+
+      if (visited.has(key)) continue;
+      visited.add(key);
+
+      const deps = craftDeps[key] || [];
+
+      for (const dep of deps) {
+        if (dep === target) return true;
+        stack.push(dep);
+      }
+    }
+
+    return false;
   }
 
   function getVehicleMap() {
@@ -261,84 +354,145 @@
     return map;
   }
 
-  function buildFamilies() {
-    const vehicleMap = getVehicleMap();
-    const parent = new Map();
+  function nameWithoutBlueprint(name) {
+    return String(name || "")
+      .replace(/\s*Bauplan\s*$/i, "")
+      .trim();
+  }
 
-    function find(x) {
-      if (!parent.has(x)) parent.set(x, x);
-      const p = parent.get(x);
-      if (p === x) return x;
-      const root = find(p);
-      parent.set(x, root);
-      return root;
-    }
+  function fallbackFamilyKey(v) {
+    let s = nameWithoutBlueprint(v.display_name || v.blueprint_name || "");
 
-    function union(a, b) {
-      const ra = find(a);
-      const rb = find(b);
-      if (ra !== rb) parent.set(rb, ra);
-    }
+    s = s
+      .replace(/\s+/g, " ")
+      .replace(/\s*-\s*S$/i, "")
+      .replace(/\s*S$/i, "")
+      .replace(/\s*-\s*R$/i, "")
+      .replace(/\s+RAW$/i, "")
+      .replace(/\s+D-Type$/i, "")
+      .replace(/\s+Cisterne$/i, "")
+      .replace(/\s+Gerät$/i, "")
+      .replace(/\s+t\d+$/i, "")
+      .replace(/\s+HardLiner.*$/i, " HardLiner")
+      .replace(/\s+Highline.*$/i, " Highline")
+      .trim();
 
-    vehicles.forEach((v) => {
-      find(vehicleKey(v));
+    if (/cyberbeast/i.test(s)) s = "Tesla Cybertruck";
+    if (/stingray/i.test(s)) s = "Corvette C2";
+    if (/z-type/i.test(s)) s = "Truffade Z-Type";
+    if (/viper/i.test(s)) s = "Dodge Viper SRT 10";
+    if (/regalia/i.test(s)) s = "Quartz Regalia";
+    if (/hotknife/i.test(s)) s = "Vapid Hotknife";
+    if (/scania\s+s-520/i.test(s)) s = "Scania S-520";
+    if (/actros\s+666/i.test(s)) s = "Mercedes-Benz Actros 666";
+
+    return normKey(groupName(v) + "::" + s);
+  }
+
+  function connectedFamiliesByCraft(items) {
+    const idToItem = new Map();
+    const neighbors = new Map();
+
+    items.forEach((v) => {
+      idToItem.set(v.id, v);
+      neighbors.set(v.id, new Set());
     });
 
-    Object.entries(craftDeps).forEach(([from, targets]) => {
-      targets.forEach((to) => {
-        if (vehicleMap.has(from) && vehicleMap.has(to)) {
-          union(from, to);
+    for (let i = 0; i < items.length; i++) {
+      for (let j = i + 1; j < items.length; j++) {
+        const a = items[i];
+        const b = items[j];
+
+        const ak = vehicleKey(a);
+        const bk = vehicleKey(b);
+
+        const linked =
+          craftDependsOn(ak, bk) ||
+          craftDependsOn(bk, ak);
+
+        if (linked) {
+          neighbors.get(a.id).add(b.id);
+          neighbors.get(b.id).add(a.id);
         }
-      });
-    });
+      }
+    }
 
-    const familiesByRoot = new Map();
+    const visited = new Set();
+    const families = [];
 
-    vehicles.forEach((v) => {
-      const key = vehicleKey(v);
-      const root = find(key);
+    items.forEach((start) => {
+      if (visited.has(start.id)) return;
 
-      if (!familiesByRoot.has(root)) {
-        familiesByRoot.set(root, []);
+      const queue = [start.id];
+      const comp = [];
+      visited.add(start.id);
+
+      while (queue.length) {
+        const id = queue.shift();
+        const item = idToItem.get(id);
+        if (item) comp.push(item);
+
+        for (const next of neighbors.get(id) || []) {
+          if (!visited.has(next)) {
+            visited.add(next);
+            queue.push(next);
+          }
+        }
       }
 
-      familiesByRoot.get(root).push(v);
-    });
-
-    const families = Array.from(familiesByRoot.values()).map((list) => {
-      const sorted = sortFamilyVariants(list);
-      const base = getBaseVariant(sorted);
-
-      return {
-        base,
-        variants: sorted
-      };
-    });
-
-    families.sort((a, b) => {
-      const ga = a.base.group_sort_order ?? 1000;
-      const gb = b.base.group_sort_order ?? 1000;
-      const sa = a.base.sort_order ?? 1000;
-      const sb = b.base.sort_order ?? 1000;
-
-      return (
-        ga - gb ||
-        sa - sb ||
-        String(a.base.group_name || "").localeCompare(String(b.base.group_name || ""), "de") ||
-        String(a.base.display_name || "").localeCompare(String(b.base.display_name || ""), "de")
-      );
+      families.push(comp);
     });
 
     return families;
   }
 
-  function familyLevel(key, memo = {}) {
-    key = normKey(key);
+  function fallbackFamiliesByName(items) {
+    const map = new Map();
+
+    items.forEach((v) => {
+      const key = fallbackFamilyKey(v);
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(v);
+    });
+
+    return Array.from(map.values());
+  }
+
+  function mergeSmallCraftFamiliesWithNameFallback(craftFamilies, items) {
+    const byId = new Map();
+    const used = new Set();
+    const result = [];
+
+    craftFamilies.forEach((family) => {
+      if (family.length > 1) {
+        family.forEach((v) => used.add(v.id));
+        result.push(family);
+      }
+    });
+
+    items.forEach((v) => {
+      if (!used.has(v.id)) {
+        byId.set(v.id, v);
+      }
+    });
+
+    const fallback = fallbackFamiliesByName(Array.from(byId.values()));
+
+    fallback.forEach((family) => {
+      result.push(family);
+    });
+
+    return result;
+  }
+
+  function familyLevel(v, allInFamily, memo = {}) {
+    const key = vehicleKey(v);
 
     if (memo[key] != null) return memo[key];
 
-    const parents = (craftParents[key] || []).filter((p) => {
-      return vehicles.some((v) => vehicleKey(v) === p);
+    const parents = allInFamily.filter((candidate) => {
+      if (candidate.id === v.id) return false;
+      return craftDependsOn(key, vehicleKey(candidate));
     });
 
     if (!parents.length) {
@@ -346,7 +500,12 @@
       return 0;
     }
 
-    memo[key] = 1 + Math.max(...parents.map((p) => familyLevel(p, memo)));
+    memo[key] =
+      1 +
+      Math.max(
+        ...parents.map((parent) => familyLevel(parent, allInFamily, memo))
+      );
+
     return memo[key];
   }
 
@@ -354,67 +513,135 @@
     const memo = {};
 
     return list.slice().sort((a, b) => {
-      const ka = vehicleKey(a);
-      const kb = vehicleKey(b);
+      const la = familyLevel(a, list, memo);
+      const lb = familyLevel(b, list, memo);
 
       return (
-        familyLevel(ka, memo) - familyLevel(kb, memo) ||
-        (a.sort_order ?? 1000) - (b.sort_order ?? 1000) ||
+        la - lb ||
+        Number(a.sort_order || 1000) - Number(b.sort_order || 1000) ||
         String(a.display_name || "").localeCompare(String(b.display_name || ""), "de")
       );
     });
   }
 
-  function getBaseVariant(list) {
-    const keys = new Set(list.map(vehicleKey));
+  function getBaseVariant(sorted) {
+    if (!sorted.length) return null;
 
-    const withoutFamilyParents = list.filter((v) => {
-      const parents = craftParents[vehicleKey(v)] || [];
-      return !parents.some((p) => keys.has(p));
+    const withLevel = sorted.map((v) => ({
+      v,
+      level: familyLevel(v, sorted, {})
+    }));
+
+    withLevel.sort((a, b) => {
+      return (
+        a.level - b.level ||
+        Number(a.v.sort_order || 1000) - Number(b.v.sort_order || 1000) ||
+        String(a.v.display_name || "").localeCompare(String(b.v.display_name || ""), "de")
+      );
     });
 
-    return withoutFamilyParents[0] || list[0];
+    return withLevel[0].v;
   }
 
-  function upgradeLabel(base, variants) {
-    const upgrades = variants.filter((v) => v.id !== base.id);
+  function buildFamilyObjects() {
+    const byGroup = new Map();
 
-    if (!upgrades.length) {
-      return "";
+    vehicles.forEach((v) => {
+      const g = groupName(v);
+      if (!byGroup.has(g)) byGroup.set(g, []);
+      byGroup.get(g).push(v);
+    });
+
+    const groups = [];
+
+    for (const [name, items] of byGroup) {
+      const craftFamilies = connectedFamiliesByCraft(items);
+      const mergedFamilies = mergeSmallCraftFamiliesWithNameFallback(craftFamilies, items);
+
+      const families = mergedFamilies.map((list) => {
+        const variants = sortFamilyVariants(list);
+        const base = getBaseVariant(variants) || variants[0];
+
+        return {
+          groupName: name,
+          groupSortOrder: base?.group_sort_order ?? 1000,
+          base,
+          variants
+        };
+      });
+
+      families.sort((a, b) => {
+        return (
+          Number(a.base?.sort_order || 1000) - Number(b.base?.sort_order || 1000) ||
+          String(a.base?.display_name || "").localeCompare(String(b.base?.display_name || ""), "de")
+        );
+      });
+
+      groups.push({
+        name,
+        sortOrder: families[0]?.groupSortOrder ?? 1000,
+        families
+      });
     }
 
-    return upgrades.map((v) => v.display_name).join(", ");
+    groups.sort((a, b) => {
+      return (
+        Number(a.sortOrder || 1000) - Number(b.sortOrder || 1000) ||
+        String(a.name || "").localeCompare(String(b.name || ""), "de")
+      );
+    });
+
+    return groups;
   }
 
-  function getPathToVariant(targetKey) {
-    const vehicleMap = getVehicleMap();
-    const target = normKey(targetKey);
+  function getUpgradeNames(family) {
+    return family.variants
+      .filter((v) => v.id !== family.base.id)
+      .map((v) => v.display_name)
+      .filter(Boolean);
+  }
+
+  function getUpgradePath(family, selected) {
+    const key = vehicleKey(selected);
+    const familyKeys = new Set(family.variants.map(vehicleKey));
+    const byKey = new Map(family.variants.map((v) => [vehicleKey(v), v]));
+
     const path = [];
     const seen = new Set();
 
-    function walk(key) {
-      if (!key || seen.has(key)) return;
-      seen.add(key);
+    function walk(currentKey) {
+      if (!currentKey || seen.has(currentKey)) return;
+      seen.add(currentKey);
 
-      const parents = (craftParents[key] || []).filter((p) => vehicleMap.has(p));
+      const parents = (craftDeps[currentKey] || [])
+        .filter((dep) => familyKeys.has(dep))
+        .map((dep) => byKey.get(dep))
+        .filter(Boolean)
+        .sort((a, b) => {
+          return (
+            familyLevel(a, family.variants, {}) - familyLevel(b, family.variants, {}) ||
+            Number(a.sort_order || 1000) - Number(b.sort_order || 1000)
+          );
+        });
 
-      if (parents.length) {
-        walk(parents[0]);
+      if (parents[0]) {
+        walk(vehicleKey(parents[0]));
       }
 
-      const v = vehicleMap.get(key);
-      if (v) path.push(v);
+      const node = byKey.get(currentKey);
+      if (node) path.push(node);
     }
 
-    walk(target);
+    walk(key);
+
+    if (!path.length) return [selected];
+
     return path;
   }
 
   async function loadVehicles() {
-    const status = $("shopStatus");
-
     try {
-      if (status) status.textContent = "Lade Fahrzeugkatalog …";
+      setStatus("Lade Fahrzeugkatalog …");
 
       const { data, error } = await window.lfcSupabase
         .from("public_vehicle_catalog")
@@ -426,44 +653,41 @@
         .filter((v) => v.group_name)
         .sort((a, b) => {
           return (
-            (a.group_sort_order ?? 1000) - (b.group_sort_order ?? 1000) ||
-            (a.sort_order ?? 1000) - (b.sort_order ?? 1000) ||
+            Number(a.group_sort_order || 1000) - Number(b.group_sort_order || 1000) ||
+            Number(a.sort_order || 1000) - Number(b.sort_order || 1000) ||
             String(a.display_name || "").localeCompare(String(b.display_name || ""), "de")
           );
         });
 
       await loadCraftDependencies();
-      render();
 
-      if (status) {
-        status.classList.remove("bt-error");
-        status.textContent = `✅ ${vehicles.length} Fahrzeuge geladen${craftLoaded ? " inkl. Upgrade-Struktur." : "."}`;
-      }
+      renderCatalog();
+
+      setStatus(
+        `✅ ${vehicles.length} Fahrzeuge geladen${
+          craftLoaded ? " – Upgrades wurden gruppiert." : " – Fallback-Gruppierung aktiv."
+        }`
+      );
     } catch (error) {
       console.error(error);
-
-      if (status) {
-        status.classList.add("bt-error");
-        status.textContent =
-          "❌ Fahrzeugdaten konnten nicht geladen werden. Prüfe assets/js/config.js und die Supabase-View public_vehicle_catalog.";
-      }
+      setStatus("❌ Fahrzeugdaten konnten nicht geladen werden: " + (error.message || String(error)), true);
     }
   }
 
-  function renderGroupNav(names) {
+  function renderGroupNav(groupObjects) {
     const nav = $("shopGroupNav");
     if (!nav) return;
 
     nav.innerHTML = "";
 
-    names.forEach((name) => {
-      const b = document.createElement("button");
-      b.className = "shop-group-nav-item";
-      b.type = "button";
-      b.textContent = name;
+    groupObjects.forEach((group) => {
+      const btn = document.createElement("button");
+      btn.className = "shop-group-nav-item";
+      btn.type = "button";
+      btn.textContent = group.name;
 
-      b.onclick = () => {
-        const target = document.getElementById("group-" + slug(name));
+      btn.onclick = () => {
+        const target = document.getElementById("group-" + slug(group.name));
         if (target) {
           target.scrollIntoView({
             behavior: "smooth",
@@ -472,160 +696,183 @@
         }
       };
 
-      nav.appendChild(b);
+      nav.appendChild(btn);
     });
   }
 
-  function render() {
+  function renderCatalog() {
     const content = $("shopContent");
+    const noResults = $("shopNoResults");
+
     if (!content) return;
 
     content.innerHTML = "";
-    cards = [];
-    groups = [];
+    allCards = [];
+    allGroups = [];
 
-    const families = buildFamilies();
-    const byGroup = new Map();
+    const groupObjects = buildFamilyObjects();
 
-    families.forEach((family) => {
-      const g = groupKey(family.base);
-      if (!byGroup.has(g)) byGroup.set(g, []);
-      byGroup.get(g).push(family);
-    });
+    renderGroupNav(groupObjects);
 
-    renderGroupNav(Array.from(byGroup.keys()));
-
-    for (const [name, list] of byGroup) {
+    groupObjects.forEach((group) => {
       const section = document.createElement("section");
       section.className = "shop-group";
-      section.id = "group-" + slug(name);
+      section.id = "group-" + slug(group.name);
 
-      section.innerHTML = `
-        <div class="shop-group-title">
-          <h2>${escHtml(name)}</h2>
-          <span class="shop-group-count">${list.length} Fahrzeuge</span>
-        </div>
-        <div class="shop-grid"></div>
+      const header = document.createElement("div");
+      header.className = "shop-group-title";
+      header.innerHTML = `
+        <h2>${escHtml(group.name)}</h2>
+        <span class="shop-group-count">${group.families.length} Modell(e)</span>
       `;
 
-      const grid = section.querySelector(".shop-grid");
+      const grid = document.createElement("div");
+      grid.className = "shop-grid";
 
-      list.forEach((family) => {
-        const v = family.base;
-        const img = firstImg(v);
-        const upgrades = upgradeLabel(v, family.variants);
+      group.families.forEach((family) => {
+        const base = family.base;
+        const img = firstImg(base);
+        const upgrades = getUpgradeNames(family);
 
         const card = document.createElement("article");
         card.className = "shop-card";
+
         card.dataset.search = norm([
-          v.display_name,
-          v.blueprint_name,
-          v.description,
-          v.group_name,
-          v.craft_key,
-          upgrades,
-          family.variants.map((x) => x.display_name).join(" ")
+          base.display_name,
+          base.blueprint_name,
+          base.description,
+          base.group_name,
+          base.craft_key,
+          upgrades.join(" "),
+          family.variants.map(vehicleSearchText).join(" ")
         ].join(" "));
 
         card.innerHTML = `
           <div class="shop-card-media">
             ${
               img
-                ? `<img src="${escHtml(img)}" alt="${escHtml(v.display_name)}" loading="lazy">`
+                ? `<img src="${escHtml(img)}" alt="${escHtml(base.display_name)}" loading="lazy" onerror="this.style.opacity='.35'">`
                 : `<div class="shop-modal-img-placeholder">Kein Bild vorhanden</div>`
             }
           </div>
 
           <div class="shop-card-body">
-            <div>
-              <h3 class="shop-card-title">${escHtml(v.display_name)}</h3>
-              ${
-                upgrades
-                  ? `<div class="shop-card-upgrades"><strong>Upgrades:</strong> ${escHtml(upgrades)}</div>`
-                  : `<div class="shop-card-upgrades">${escHtml(v.description || "").slice(0, 120)}${(v.description || "").length > 120 ? "…" : ""}</div>`
-              }
-            </div>
+            <h3 class="shop-card-title">${escHtml(base.display_name)}</h3>
 
-            <p class="shop-card-price-main">${euro(v.price)}</p>
+            ${
+              upgrades.length
+                ? `
+                  <div class="shop-card-upgrades">
+                    <div><strong>Upgrades:</strong> ${upgrades.length}</div>
+                    <div>→ ${escHtml(upgrades.join(" → "))}</div>
+                  </div>
+                `
+                : `
+                  <div class="shop-card-upgrades">
+                    ${escHtml(base.description || "").slice(0, 130)}${(base.description || "").length > 130 ? "…" : ""}
+                  </div>
+                `
+            }
+
+            <div class="shop-card-price-main">${euro(base.price)}</div>
           </div>
         `;
 
         card.onclick = () => openModal(family);
 
         grid.appendChild(card);
-        cards.push(card);
+        allCards.push(card);
       });
 
+      section.appendChild(header);
+      section.appendChild(grid);
       content.appendChild(section);
-      groups.push(section);
-    }
+      allGroups.push(section);
+    });
 
-    const info = $("shopSearchInfo");
-    if (info) info.textContent = `${families.length} Einträge`;
+    if (noResults) noResults.style.display = "none";
+    setSearchInfo(`${groupObjects.reduce((sum, g) => sum + g.families.length, 0)} Einträge`);
   }
 
-  function filter() {
+  function applySearchFilter() {
     const q = norm($("shopSearch")?.value || "");
     let shown = 0;
 
-    cards.forEach((c) => {
-      const ok = !q || c.dataset.search.includes(q);
-      c.style.display = ok ? "" : "none";
+    allCards.forEach((card) => {
+      const ok = !q || card.dataset.search.includes(q);
+      card.style.display = ok ? "" : "none";
       if (ok) shown++;
     });
 
-    groups.forEach((g) => {
-      const any = Array.from(g.querySelectorAll(".shop-card")).some((c) => c.style.display !== "none");
-      g.style.display = any ? "" : "none";
+    allGroups.forEach((group) => {
+      const hasVisibleCard = Array.from(group.querySelectorAll(".shop-card"))
+        .some((card) => card.style.display !== "none");
+
+      group.style.display = hasVisibleCard ? "" : "none";
     });
 
     const noResults = $("shopNoResults");
     if (noResults) noResults.style.display = shown ? "none" : "block";
 
-    const info = $("shopSearchInfo");
-    if (info) info.textContent = `${shown} Treffer`;
+    setSearchInfo(`${shown} Treffer`);
   }
 
   function openModal(family) {
+    activeFamily = family;
+    activeSelection = family.base;
+
     const modal = $("shopModal");
+    const title = $("shopModalTitle");
+
     if (!modal) return;
 
-    const base = family.base;
-    const variants = family.variants || [base];
+    if (title) title.textContent = family.base.display_name;
 
-    activeSelection = base;
-
-    $("shopModalTitle").textContent = base.display_name;
-    renderModalVariant(family, base);
+    renderModalVariant(family, family.base);
 
     modal.classList.add("active");
     modal.setAttribute("aria-hidden", "false");
   }
 
+  function closeModal() {
+    const modal = $("shopModal");
+    if (!modal) return;
+
+    modal.classList.remove("active");
+    modal.setAttribute("aria-hidden", "true");
+  }
+
   function renderModalVariant(family, selected) {
+    activeFamily = family;
     activeSelection = selected;
 
     const modalContent = $("shopModalContent");
-    if (!modalContent) return;
+    const modalTitle = $("shopModalTitle");
 
-    const variants = family.variants || [selected];
+    if (!modalContent) return;
+    if (modalTitle) modalTitle.textContent = family.base.display_name;
+
+    const variants = family.variants;
     const allImgs = imgs(selected);
-    const path = getPathToVariant(vehicleKey(selected));
+    const path = getUpgradePath(family, selected);
+    const pathText = path.map((v) => v.display_name).join(" → ");
 
     modalContent.innerHTML = `
       ${
         variants.length > 1
           ? `
-            <div class="shop-modal-variant-tabs">
-              ${variants.map((v) => `
-                <button
-                  class="shop-modal-variant-tab ${v.id === selected.id ? "active" : ""}"
-                  type="button"
-                  data-id="${escHtml(v.id)}"
-                >
-                  ${escHtml(v.display_name)}
-                </button>
-              `).join("")}
+            <div class="shop-tabs">
+              <div class="shop-tab-buttons">
+                ${variants.map((v) => `
+                  <button
+                    class="shop-tab-button ${v.id === selected.id ? "active" : ""}"
+                    type="button"
+                    data-id="${escHtml(v.id)}"
+                  >
+                    ${escHtml(v.display_name)}
+                  </button>
+                `).join("")}
+              </div>
             </div>
           `
           : ""
@@ -641,7 +888,7 @@
 
       ${
         path.length > 1
-          ? `<div class="shop-path"><strong>Upgrade-Pfad:</strong> ${path.map((v) => escHtml(v.display_name)).join(" → ")}</div>`
+          ? `<div class="shop-path"><strong>Upgrade-Pfad:</strong> ${escHtml(pathText)}</div>`
           : ""
       }
 
@@ -649,7 +896,7 @@
         <div class="shop-modal-img-box">
           ${
             allImgs[0]
-              ? `<img id="modalVehicleImg" class="shop-modal-img" src="${escHtml(allImgs[0])}" alt="${escHtml(selected.display_name)}">`
+              ? `<img id="modalVehicleImg" class="shop-modal-img" src="${escHtml(allImgs[0])}" alt="${escHtml(selected.display_name)}" loading="lazy">`
               : `<div class="shop-modal-img-placeholder">Kein Bild vorhanden.</div>`
           }
         </div>
@@ -691,7 +938,7 @@
       </div>
     `;
 
-    document.querySelectorAll(".shop-modal-variant-tab").forEach((btn) => {
+    document.querySelectorAll(".shop-tab-button").forEach((btn) => {
       btn.onclick = () => {
         const next = variants.find((v) => String(v.id) === String(btn.dataset.id));
         if (next) renderModalVariant(family, next);
@@ -699,15 +946,14 @@
     });
 
     const imgEl = $("modalVehicleImg");
-    if (imgEl) {
-      imgEl.onclick = () => openLightbox(imgEl.src);
-    }
+    if (imgEl) imgEl.onclick = () => openLightbox(imgEl.src);
 
     document.querySelectorAll(".shop-modal-img-btn").forEach((btn) => {
       btn.onclick = () => {
-        const i = Number(btn.dataset.idx);
+        const i = Number(btn.dataset.idx || 0);
         const img = $("modalVehicleImg");
-        if (!img) return;
+
+        if (!img || !allImgs[i]) return;
 
         img.src = allImgs[i];
 
@@ -717,18 +963,8 @@
       };
     });
 
-    const openRequestBtn = $("openRequestBtn");
-    if (openRequestBtn) {
-      openRequestBtn.onclick = () => openRequest(selected);
-    }
-  }
-
-  function closeModal() {
-    const modal = $("shopModal");
-    if (!modal) return;
-
-    modal.classList.remove("active");
-    modal.setAttribute("aria-hidden", "true");
+    const requestBtn = $("openRequestBtn");
+    if (requestBtn) requestBtn.onclick = () => openRequest(selected);
   }
 
   function openLightbox(src) {
@@ -753,23 +989,52 @@
     img.src = "";
   }
 
-  function openRequest(v) {
-    activeSelection = v;
+  function openRequest(selected) {
+    activeSelection = selected;
 
     const modal = $("requestModal");
+    const summary = $("requestSummary");
+    const status = $("requestStatus");
+    const modeWrap = $("requestModeWrap");
+    const reqMode = $("reqMode");
+
     if (!modal) return;
 
-    const summary = $("requestSummary");
-
     if (summary) {
+      const path =
+        activeFamily && activeFamily.variants.length > 1
+          ? getUpgradePath(activeFamily, selected)
+          : [selected];
+
       summary.innerHTML = `
-        <strong>Fahrzeug:</strong> ${escHtml(v.display_name)}<br>
-        <strong>Craft-Key:</strong> ${escHtml(v.craft_key || "-")}<br>
-        <strong>Preis:</strong> ${euro(v.price)}
+        <strong>Fahrzeug:</strong> ${escHtml(selected.display_name)}<br>
+        <strong>Craft-Key:</strong> ${escHtml(selected.craft_key || "-")}<br>
+        <strong>Preis:</strong> ${euro(selected.price)}
+        ${
+          path.length > 1
+            ? `<br><strong>Upgrade-Pfad:</strong> ${escHtml(path.map((v) => v.display_name).join(" → "))}`
+            : ""
+        }
       `;
     }
 
-    const status = $("requestStatus");
+    if (modeWrap && reqMode && activeFamily) {
+      modeWrap.style.display = activeFamily.variants.length > 1 ? "" : "none";
+      reqMode.innerHTML = activeFamily.variants.map((v) => `
+        <option value="${escHtml(v.id)}" ${v.id === selected.id ? "selected" : ""}>
+          ${escHtml(v.display_name)} – ${euro(v.price)}
+        </option>
+      `).join("");
+
+      reqMode.onchange = () => {
+        const next = activeFamily.variants.find((v) => String(v.id) === String(reqMode.value));
+        if (next) {
+          activeSelection = next;
+          openRequest(next);
+        }
+      };
+    }
+
     if (status) {
       status.className = "shop-form-status";
       status.textContent = "";
@@ -815,10 +1080,16 @@
     }
 
     try {
+      const path =
+        activeFamily && activeFamily.variants.length > 1
+          ? getUpgradePath(activeFamily, activeSelection)
+          : [activeSelection];
+
       const message = [
         `Fahrzeug: ${activeSelection.display_name}`,
         `Craft-Key: ${activeSelection.craft_key || "-"}`,
         `Preis: ${euro(activeSelection.price)}`,
+        path.length > 1 ? `Upgrade-Pfad: ${path.map((v) => v.display_name).join(" → ")}` : "",
         `Kontakt: ${contact}`,
         note ? `Notiz: ${note}` : ""
       ].filter(Boolean).join("\n");
@@ -843,14 +1114,13 @@
       const form = $("requestForm");
       if (form) form.reset();
 
-      setTimeout(closeRequest, 1300);
+      setTimeout(closeRequest, 1200);
     } catch (error) {
       console.error(error);
 
       if (status) {
         status.className = "shop-form-status err";
-        status.textContent =
-          "❌ Anfrage konnte nicht gespeichert oder an Discord weitergegeben werden.";
+        status.textContent = "❌ Anfrage konnte nicht gesendet werden.";
       }
     } finally {
       if (send) {
@@ -862,7 +1132,7 @@
 
   function bindEvents() {
     const search = $("shopSearch");
-    if (search) search.addEventListener("input", filter);
+    if (search) search.addEventListener("input", applySearchFilter);
 
     const modalClose = $("shopModalClose");
     if (modalClose) modalClose.onclick = closeModal;
@@ -885,8 +1155,8 @@
     const requestForm = $("requestForm");
     if (requestForm) requestForm.addEventListener("submit", submitRequest);
 
-    document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") {
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape") {
         closeModal();
         closeRequest();
         closeLightbox();
