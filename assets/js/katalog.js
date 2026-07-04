@@ -2,18 +2,11 @@
   "use strict";
 
   let vehicles = [];
+  let upgradeEdges = [];
   let allCards = [];
   let allGroups = [];
   let activeFamily = null;
   let activeSelection = null;
-
-  let craftDeps = {};
-  let craftParents = {};
-  let craftLoaded = false;
-
-  const CRAFT_SHEET_ID = "1ObAKUBNv5IjXEyY0TD85gK9dJhlm8Uq7Qj6QZgHkoZg";
-  const TAB_RECIPES = "recipes";
-  const TAB_RECIPE_ITEMS = "recipe_items";
 
   const $ = (id) => document.getElementById(id);
 
@@ -35,16 +28,6 @@
       .normalize("NFD")
       .replace(/[\u0300-\u036f]/g, "")
       .trim();
-  }
-
-  function normKey(str) {
-    return String(str ?? "")
-      .normalize("NFKC")
-      .replace(/[\u00A0\u200B\t\n\r]+/g, "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .replace(/[;:]+$/, "")
-      .toLowerCase();
   }
 
   function slug(str) {
@@ -101,12 +84,8 @@
     return imgs(v)[0] || "";
   }
 
-  function vehicleKey(v) {
-    return normKey(v.craft_key || v.blueprint_name || v.display_name || v.id);
-  }
-
-  function isCraftKey(value) {
-    return /^craft_\d+$/i.test(String(value || "").trim());
+  function groupName(v) {
+    return v.group_name || "Ohne Gruppe";
   }
 
   function vehicleSearchText(v) {
@@ -118,10 +97,6 @@
       v.craft_key,
       v.trunk_size
     ].join(" "));
-  }
-
-  function groupName(v) {
-    return v.group_name || "Ohne Gruppe";
   }
 
   async function triggerDiscordNotify() {
@@ -143,294 +118,93 @@
     }
   }
 
-  function gvizJSONP(sheetName, timeoutMs = 15000) {
-    return new Promise((resolve, reject) => {
-      const cb =
-        "__lfc_gviz_" +
-        sheetName.replace(/[^a-z0-9]/gi, "_") +
-        "_" +
-        Math.random().toString(36).slice(2);
-
-      const url =
-        "https://docs.google.com/spreadsheets/d/" +
-        encodeURIComponent(CRAFT_SHEET_ID) +
-        "/gviz/tq?tqx=out:json;responseHandler:" +
-        encodeURIComponent(cb) +
-        "&sheet=" +
-        encodeURIComponent(sheetName);
-
-      const script = document.createElement("script");
-
-      const timer = setTimeout(() => {
-        cleanup();
-        reject(new Error("Timeout beim Laden von Sheet: " + sheetName));
-      }, timeoutMs);
-
-      function cleanup() {
-        clearTimeout(timer);
-
-        try {
-          delete window[cb];
-        } catch {}
-
-        if (script.parentNode) {
-          script.parentNode.removeChild(script);
-        }
-      }
-
-      window[cb] = function (payload) {
-        cleanup();
-
-        try {
-          const cols = (payload.table.cols || []).map((c, index) => {
-            const label = String(c.label || c.id || `col_${index}`).trim();
-            return label || `col_${index}`;
-          });
-
-          const rows = (payload.table.rows || []).map((row) => {
-            const obj = {};
-
-            (row.c || []).forEach((cell, index) => {
-              const key = cols[index] || `col_${index}`;
-              obj[key] = cell ? cell.v : "";
-            });
-
-            return obj;
-          });
-
-          resolve(rows);
-        } catch (error) {
-          reject(error);
-        }
-      };
-
-      script.onerror = () => {
-        cleanup();
-        reject(new Error("GViz Fehler beim Laden von Sheet: " + sheetName));
-      };
-
-      script.src = url;
-      document.head.appendChild(script);
-    });
-  }
-
-  function getRowValue(row, names) {
-    const entries = Object.entries(row || {});
-    const normalized = entries.map(([key, value]) => [normKey(key), value]);
-
-    for (const name of names) {
-      const target = normKey(name);
-      const found = normalized.find(([key]) => key === target);
-      if (found) return found[1];
-    }
-
-    for (const name of names) {
-      const target = normKey(name);
-      const found = normalized.find(([key]) => key.includes(target));
-      if (found) return found[1];
-    }
-
-    return "";
-  }
-
-  function addDependency(productKey, itemKey) {
-    const product = normKey(productKey);
-    const item = normKey(itemKey);
-
-    if (!product || !item || product === item) return;
-
-    if (!craftDeps[product]) craftDeps[product] = new Set();
-    if (!craftParents[item]) craftParents[item] = new Set();
-
-    craftDeps[product].add(item);
-    craftParents[item].add(product);
-  }
-
-  async function loadCraftDependencies() {
-    craftDeps = {};
-    craftParents = {};
-    craftLoaded = false;
-
-    try {
-      const [itemsRows] = await Promise.all([
-        gvizJSONP(TAB_RECIPE_ITEMS),
-        gvizJSONP(TAB_RECIPES).catch(() => [])
-      ]);
-
-      itemsRows.forEach((row) => {
-        const product =
-          getRowValue(row, [
-            "product",
-            "produkt",
-            "recipe",
-            "recipe_key",
-            "craft_key",
-            "target",
-            "result",
-            "output",
-            "output_key",
-            "result_key"
-          ]) || "";
-
-        const item =
-          getRowValue(row, [
-            "item",
-            "item_key",
-            "input",
-            "input_key",
-            "ingredient",
-            "ingredient_key",
-            "source",
-            "source_key",
-            "required_item"
-          ]) || "";
-
-        const qty =
-          getRowValue(row, [
-            "qty",
-            "quantity",
-            "menge",
-            "amount",
-            "anzahl"
-          ]) || "";
-
-        if (!product || !item) return;
-
-        if (qty !== "" && Number(qty) === 0) return;
-
-        addDependency(product, item);
-      });
-
-      craftDeps = Object.fromEntries(
-        Object.entries(craftDeps).map(([key, set]) => [key, Array.from(set)])
-      );
-
-      craftParents = Object.fromEntries(
-        Object.entries(craftParents).map(([key, set]) => [key, Array.from(set)])
-      );
-
-      craftLoaded = Object.keys(craftDeps).length > 0;
-    } catch (error) {
-      console.warn("Upgrade-Daten konnten nicht geladen werden. Fallback-Gruppierung wird genutzt.", error);
-      craftDeps = {};
-      craftParents = {};
-      craftLoaded = false;
-    }
-  }
-
-  function craftDependsOn(childKey, ancestorKey) {
-    const start = normKey(childKey);
-    const target = normKey(ancestorKey);
-
-    if (!start || !target || start === target) return false;
-
-    const visited = new Set();
-    const stack = [start];
-
-    while (stack.length) {
-      const key = stack.pop();
-
-      if (visited.has(key)) continue;
-      visited.add(key);
-
-      const deps = craftDeps[key] || [];
-
-      for (const dep of deps) {
-        if (dep === target) return true;
-        stack.push(dep);
-      }
-    }
-
-    return false;
-  }
-
-  function getVehicleMap() {
+  function buildParentMap() {
     const map = new Map();
 
-    vehicles.forEach((v) => {
-      map.set(vehicleKey(v), v);
-    });
+    upgradeEdges
+      .filter((edge) => edge.is_active !== false)
+      .forEach((edge) => {
+        const child = String(edge.to_vehicle_id);
+        if (!map.has(child)) {
+          map.set(child, String(edge.from_vehicle_id));
+        }
+      });
 
     return map;
   }
 
-  function nameWithoutBlueprint(name) {
-    return String(name || "")
-      .replace(/\s*Bauplan\s*$/i, "")
-      .trim();
-  }
+  function getVehicleLevel(vehicleId, parentByChild) {
+    let level = 0;
+    let current = String(vehicleId);
+    const seen = new Set();
 
-  function fallbackFamilyKey(v) {
-    let s = nameWithoutBlueprint(v.display_name || v.blueprint_name || "");
+    while (parentByChild.has(current)) {
+      if (seen.has(current)) break;
+      seen.add(current);
 
-    s = s
-      .replace(/\s+/g, " ")
-      .replace(/\s*-\s*S$/i, "")
-      .replace(/\s*S$/i, "")
-      .replace(/\s*-\s*R$/i, "")
-      .replace(/\s+RAW$/i, "")
-      .replace(/\s+D-Type$/i, "")
-      .replace(/\s+Cisterne$/i, "")
-      .replace(/\s+Gerät$/i, "")
-      .replace(/\s+t\d+$/i, "")
-      .replace(/\s+HardLiner.*$/i, " HardLiner")
-      .replace(/\s+Highline.*$/i, " Highline")
-      .trim();
-
-    if (/cyberbeast/i.test(s)) s = "Tesla Cybertruck";
-    if (/stingray/i.test(s)) s = "Corvette C2";
-    if (/z-type/i.test(s)) s = "Truffade Z-Type";
-    if (/viper/i.test(s)) s = "Dodge Viper SRT 10";
-    if (/regalia/i.test(s)) s = "Quartz Regalia";
-    if (/hotknife/i.test(s)) s = "Vapid Hotknife";
-    if (/scania\s+s-520/i.test(s)) s = "Scania S-520";
-    if (/actros\s+666/i.test(s)) s = "Mercedes-Benz Actros 666";
-
-    return normKey(groupName(v) + "::" + s);
-  }
-
-  function connectedFamiliesByCraft(items) {
-    const idToItem = new Map();
-    const neighbors = new Map();
-
-    items.forEach((v) => {
-      idToItem.set(v.id, v);
-      neighbors.set(v.id, new Set());
-    });
-
-    for (let i = 0; i < items.length; i++) {
-      for (let j = i + 1; j < items.length; j++) {
-        const a = items[i];
-        const b = items[j];
-
-        const ak = vehicleKey(a);
-        const bk = vehicleKey(b);
-
-        const linked =
-          craftDependsOn(ak, bk) ||
-          craftDependsOn(bk, ak);
-
-        if (linked) {
-          neighbors.get(a.id).add(b.id);
-          neighbors.get(b.id).add(a.id);
-        }
-      }
+      current = parentByChild.get(current);
+      level++;
     }
 
+    return level;
+  }
+
+  function getPathToVehicle(vehicleId) {
+    const byId = new Map(vehicles.map((v) => [String(v.id), v]));
+    const parentByChild = buildParentMap();
+
+    const path = [];
+    let current = String(vehicleId);
+    const seen = new Set();
+
+    while (current && byId.has(current)) {
+      if (seen.has(current)) break;
+      seen.add(current);
+
+      path.push(byId.get(current));
+
+      if (!parentByChild.has(current)) break;
+      current = parentByChild.get(current);
+    }
+
+    return path.reverse();
+  }
+
+  function buildFamilies() {
+    const byId = new Map(vehicles.map((v) => [String(v.id), v]));
+    const neighbors = new Map();
+
+    vehicles.forEach((v) => neighbors.set(String(v.id), new Set()));
+
+    upgradeEdges
+      .filter((edge) => edge.is_active !== false)
+      .forEach((edge) => {
+        const from = String(edge.from_vehicle_id);
+        const to = String(edge.to_vehicle_id);
+
+        if (!byId.has(from) || !byId.has(to)) return;
+
+        neighbors.get(from).add(to);
+        neighbors.get(to).add(from);
+      });
+
+    const parentByChild = buildParentMap();
     const visited = new Set();
     const families = [];
 
-    items.forEach((start) => {
-      if (visited.has(start.id)) return;
+    vehicles.forEach((start) => {
+      const startId = String(start.id);
+      if (visited.has(startId)) return;
 
-      const queue = [start.id];
-      const comp = [];
-      visited.add(start.id);
+      const queue = [startId];
+      const component = [];
+
+      visited.add(startId);
 
       while (queue.length) {
         const id = queue.shift();
-        const item = idToItem.get(id);
-        if (item) comp.push(item);
+        const vehicle = byId.get(id);
+        if (vehicle) component.push(vehicle);
 
         for (const next of neighbors.get(id) || []) {
           if (!visited.has(next)) {
@@ -440,216 +214,63 @@
         }
       }
 
-      families.push(comp);
+      const roots = component.filter((v) => !parentByChild.has(String(v.id)));
+      const base = roots[0] || component[0];
+
+      const variants = component.slice().sort((a, b) => {
+        const la = getVehicleLevel(a.id, parentByChild);
+        const lb = getVehicleLevel(b.id, parentByChild);
+
+        return (
+          la - lb ||
+          Number(a.sort_order || 1000) - Number(b.sort_order || 1000) ||
+          String(a.display_name || "").localeCompare(String(b.display_name || ""), "de")
+        );
+      });
+
+      families.push({
+        base,
+        variants
+      });
+    });
+
+    families.sort((a, b) => {
+      return (
+        Number(a.base?.group_sort_order || 1000) - Number(b.base?.group_sort_order || 1000) ||
+        Number(a.base?.sort_order || 1000) - Number(b.base?.sort_order || 1000) ||
+        String(a.base?.display_name || "").localeCompare(String(b.base?.display_name || ""), "de")
+      );
     });
 
     return families;
   }
 
-  function fallbackFamiliesByName(items) {
-    const map = new Map();
-
-    items.forEach((v) => {
-      const key = fallbackFamilyKey(v);
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push(v);
-    });
-
-    return Array.from(map.values());
-  }
-
-  function mergeSmallCraftFamiliesWithNameFallback(craftFamilies, items) {
-    const byId = new Map();
-    const used = new Set();
-    const result = [];
-
-    craftFamilies.forEach((family) => {
-      if (family.length > 1) {
-        family.forEach((v) => used.add(v.id));
-        result.push(family);
-      }
-    });
-
-    items.forEach((v) => {
-      if (!used.has(v.id)) {
-        byId.set(v.id, v);
-      }
-    });
-
-    const fallback = fallbackFamiliesByName(Array.from(byId.values()));
-
-    fallback.forEach((family) => {
-      result.push(family);
-    });
-
-    return result;
-  }
-
-  function familyLevel(v, allInFamily, memo = {}) {
-    const key = vehicleKey(v);
-
-    if (memo[key] != null) return memo[key];
-
-    const parents = allInFamily.filter((candidate) => {
-      if (candidate.id === v.id) return false;
-      return craftDependsOn(key, vehicleKey(candidate));
-    });
-
-    if (!parents.length) {
-      memo[key] = 0;
-      return 0;
-    }
-
-    memo[key] =
-      1 +
-      Math.max(
-        ...parents.map((parent) => familyLevel(parent, allInFamily, memo))
-      );
-
-    return memo[key];
-  }
-
-  function sortFamilyVariants(list) {
-    const memo = {};
-
-    return list.slice().sort((a, b) => {
-      const la = familyLevel(a, list, memo);
-      const lb = familyLevel(b, list, memo);
-
-      return (
-        la - lb ||
-        Number(a.sort_order || 1000) - Number(b.sort_order || 1000) ||
-        String(a.display_name || "").localeCompare(String(b.display_name || ""), "de")
-      );
-    });
-  }
-
-  function getBaseVariant(sorted) {
-    if (!sorted.length) return null;
-
-    const withLevel = sorted.map((v) => ({
-      v,
-      level: familyLevel(v, sorted, {})
-    }));
-
-    withLevel.sort((a, b) => {
-      return (
-        a.level - b.level ||
-        Number(a.v.sort_order || 1000) - Number(b.v.sort_order || 1000) ||
-        String(a.v.display_name || "").localeCompare(String(b.v.display_name || ""), "de")
-      );
-    });
-
-    return withLevel[0].v;
-  }
-
-  function buildFamilyObjects() {
-    const byGroup = new Map();
-
-    vehicles.forEach((v) => {
-      const g = groupName(v);
-      if (!byGroup.has(g)) byGroup.set(g, []);
-      byGroup.get(g).push(v);
-    });
-
-    const groups = [];
-
-    for (const [name, items] of byGroup) {
-      const craftFamilies = connectedFamiliesByCraft(items);
-      const mergedFamilies = mergeSmallCraftFamiliesWithNameFallback(craftFamilies, items);
-
-      const families = mergedFamilies.map((list) => {
-        const variants = sortFamilyVariants(list);
-        const base = getBaseVariant(variants) || variants[0];
-
-        return {
-          groupName: name,
-          groupSortOrder: base?.group_sort_order ?? 1000,
-          base,
-          variants
-        };
-      });
-
-      families.sort((a, b) => {
-        return (
-          Number(a.base?.sort_order || 1000) - Number(b.base?.sort_order || 1000) ||
-          String(a.base?.display_name || "").localeCompare(String(b.base?.display_name || ""), "de")
-        );
-      });
-
-      groups.push({
-        name,
-        sortOrder: families[0]?.groupSortOrder ?? 1000,
-        families
-      });
-    }
-
-    groups.sort((a, b) => {
-      return (
-        Number(a.sortOrder || 1000) - Number(b.sortOrder || 1000) ||
-        String(a.name || "").localeCompare(String(b.name || ""), "de")
-      );
-    });
-
-    return groups;
-  }
-
   function getUpgradeNames(family) {
     return family.variants
-      .filter((v) => v.id !== family.base.id)
+      .filter((v) => String(v.id) !== String(family.base.id))
       .map((v) => v.display_name)
       .filter(Boolean);
-  }
-
-  function getUpgradePath(family, selected) {
-    const key = vehicleKey(selected);
-    const familyKeys = new Set(family.variants.map(vehicleKey));
-    const byKey = new Map(family.variants.map((v) => [vehicleKey(v), v]));
-
-    const path = [];
-    const seen = new Set();
-
-    function walk(currentKey) {
-      if (!currentKey || seen.has(currentKey)) return;
-      seen.add(currentKey);
-
-      const parents = (craftDeps[currentKey] || [])
-        .filter((dep) => familyKeys.has(dep))
-        .map((dep) => byKey.get(dep))
-        .filter(Boolean)
-        .sort((a, b) => {
-          return (
-            familyLevel(a, family.variants, {}) - familyLevel(b, family.variants, {}) ||
-            Number(a.sort_order || 1000) - Number(b.sort_order || 1000)
-          );
-        });
-
-      if (parents[0]) {
-        walk(vehicleKey(parents[0]));
-      }
-
-      const node = byKey.get(currentKey);
-      if (node) path.push(node);
-    }
-
-    walk(key);
-
-    if (!path.length) return [selected];
-
-    return path;
   }
 
   async function loadVehicles() {
     try {
       setStatus("Lade Fahrzeugkatalog …");
 
-      const { data, error } = await window.lfcSupabase
-        .from("public_vehicle_catalog")
-        .select("*");
+      const [vehiclesRes, edgesRes] = await Promise.all([
+        window.lfcSupabase
+          .from("public_vehicle_catalog")
+          .select("*"),
+        window.lfcSupabase
+          .from("vehicle_upgrade_edges")
+          .select("id,from_vehicle_id,to_vehicle_id,sort_order,is_active")
+          .eq("is_active", true)
+          .order("sort_order", { ascending: true })
+      ]);
 
-      if (error) throw error;
+      if (vehiclesRes.error) throw vehiclesRes.error;
+      if (edgesRes.error) throw edgesRes.error;
 
-      vehicles = (data || [])
+      vehicles = (vehiclesRes.data || [])
         .filter((v) => v.group_name)
         .sort((a, b) => {
           return (
@@ -659,15 +280,11 @@
           );
         });
 
-      await loadCraftDependencies();
+      upgradeEdges = edgesRes.data || [];
 
       renderCatalog();
 
-      setStatus(
-        `✅ ${vehicles.length} Fahrzeuge geladen${
-          craftLoaded ? " – Upgrades wurden gruppiert." : " – Fallback-Gruppierung aktiv."
-        }`
-      );
+      setStatus(`✅ ${vehicles.length} Fahrzeuge geladen – Upgrades manuell aus Supabase gruppiert.`);
     } catch (error) {
       console.error(error);
       setStatus("❌ Fahrzeugdaten konnten nicht geladen werden: " + (error.message || String(error)), true);
@@ -710,7 +327,28 @@
     allCards = [];
     allGroups = [];
 
-    const groupObjects = buildFamilyObjects();
+    const families = buildFamilies();
+    const byGroup = new Map();
+
+    families.forEach((family) => {
+      const name = groupName(family.base);
+      if (!byGroup.has(name)) {
+        byGroup.set(name, {
+          name,
+          sortOrder: family.base.group_sort_order || 1000,
+          families: []
+        });
+      }
+
+      byGroup.get(name).families.push(family);
+    });
+
+    const groupObjects = Array.from(byGroup.values()).sort((a, b) => {
+      return (
+        Number(a.sortOrder || 1000) - Number(b.sortOrder || 1000) ||
+        String(a.name || "").localeCompare(String(b.name || ""), "de")
+      );
+    });
 
     renderGroupNav(groupObjects);
 
@@ -791,7 +429,7 @@
     });
 
     if (noResults) noResults.style.display = "none";
-    setSearchInfo(`${groupObjects.reduce((sum, g) => sum + g.families.length, 0)} Einträge`);
+    setSearchInfo(`${families.length} Einträge`);
   }
 
   function applySearchFilter() {
@@ -854,7 +492,7 @@
 
     const variants = family.variants;
     const allImgs = imgs(selected);
-    const path = getUpgradePath(family, selected);
+    const path = getPathToVehicle(selected.id);
     const pathText = path.map((v) => v.display_name).join(" → ");
 
     modalContent.innerHTML = `
@@ -865,7 +503,7 @@
               <div class="shop-tab-buttons">
                 ${variants.map((v) => `
                   <button
-                    class="shop-tab-button ${v.id === selected.id ? "active" : ""}"
+                    class="shop-tab-button ${String(v.id) === String(selected.id) ? "active" : ""}"
                     type="button"
                     data-id="${escHtml(v.id)}"
                   >
@@ -1001,10 +639,7 @@
     if (!modal) return;
 
     if (summary) {
-      const path =
-        activeFamily && activeFamily.variants.length > 1
-          ? getUpgradePath(activeFamily, selected)
-          : [selected];
+      const path = getPathToVehicle(selected.id);
 
       summary.innerHTML = `
         <strong>Fahrzeug:</strong> ${escHtml(selected.display_name)}<br>
@@ -1021,7 +656,7 @@
     if (modeWrap && reqMode && activeFamily) {
       modeWrap.style.display = activeFamily.variants.length > 1 ? "" : "none";
       reqMode.innerHTML = activeFamily.variants.map((v) => `
-        <option value="${escHtml(v.id)}" ${v.id === selected.id ? "selected" : ""}>
+        <option value="${escHtml(v.id)}" ${String(v.id) === String(selected.id) ? "selected" : ""}>
           ${escHtml(v.display_name)} – ${euro(v.price)}
         </option>
       `).join("");
@@ -1080,10 +715,7 @@
     }
 
     try {
-      const path =
-        activeFamily && activeFamily.variants.length > 1
-          ? getUpgradePath(activeFamily, activeSelection)
-          : [activeSelection];
+      const path = getPathToVehicle(activeSelection.id);
 
       const message = [
         `Fahrzeug: ${activeSelection.display_name}`,
