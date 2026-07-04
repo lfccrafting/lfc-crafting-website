@@ -1,16 +1,10 @@
 let currentTab = "vehicles";
 let vehicleGroupsCache = [];
+let catalogUpgradeEdgesCache = [];
 let orderVehiclesCache = [];
 let orderFamiliesCache = [];
 let orderResourcesCache = [];
 let currentUserRole = null;
-
-let craftDeps = {};
-let craftLoaded = false;
-
-const CRAFT_SHEET_ID = "1ObAKUBNv5IjXEyY0TD85gK9dJhlm8Uq7Qj6QZgHkoZg";
-const TAB_RECIPES = "recipes";
-const TAB_RECIPE_ITEMS = "recipe_items";
 
 const FINISHED_STATUSES = ["completed", "cancelled", "rejected"];
 
@@ -51,16 +45,6 @@ function norm(str) {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .trim();
-}
-
-function normKey(str) {
-  return String(str ?? "")
-    .normalize("NFKC")
-    .replace(/[\u00A0\u200B\t\n\r]+/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/[;:]+$/, "")
-    .toLowerCase();
 }
 
 function roleLevel(role) {
@@ -141,27 +125,6 @@ function normalizeImageUrl(url) {
   return s;
 }
 
-function getVehicleImages(v) {
-  const arr = Array.isArray(v.images) ? v.images : [];
-  return arr
-    .slice()
-    .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0))
-    .map((x) => normalizeImageUrl(x.url || x.image_url))
-    .filter(Boolean);
-}
-
-function firstVehicleImage(v) {
-  return getVehicleImages(v)[0] || "";
-}
-
-function vehicleKey(v) {
-  return normKey(v.craft_key || v.blueprint_name || v.display_name || v.id);
-}
-
-function isRucksackVehicle(v) {
-  return norm(v.group_name).includes("rucksack");
-}
-
 function parseImageTextarea(value) {
   const seen = new Set();
 
@@ -207,16 +170,25 @@ function renderImagePreview(imageText) {
   `;
 }
 
-function renderGroupOptions(selectedGroupId) {
-  const selected = selectedGroupId ? String(selectedGroupId) : "";
+function getVehicleImages(v) {
+  const arr = Array.isArray(v.images) ? v.images : [];
+  return arr
+    .slice()
+    .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0))
+    .map((x) => normalizeImageUrl(x.url || x.image_url))
+    .filter(Boolean);
+}
 
-  return `
-    <option value="">Ohne Gruppe</option>
-    ${vehicleGroupsCache.map((g) => {
-      const id = String(g.id);
-      return `<option value="${escHtml(id)}" ${id === selected ? "selected" : ""}>${escHtml(g.name)}</option>`;
-    }).join("")}
-  `;
+function firstVehicleImage(v) {
+  return getVehicleImages(v)[0] || "";
+}
+
+function isRucksackVehicle(v) {
+  return norm(v.group_name).includes("rucksack");
+}
+
+function generateManualCraftKey() {
+  return "manual_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7);
 }
 
 function optionKey(status, publicLabel) {
@@ -259,271 +231,79 @@ function generateOrderNumber() {
 }
 
 /* =========================================================
-   GVIZ / UPGRADE-LOGIK
+   UPGRADE-STRUKTUR OHNE GOOGLE/EXCEL
 ========================================================= */
 
-function gvizJSONP(sheetName, timeoutMs = 15000) {
-  return new Promise((resolve, reject) => {
-    const cb =
-      "__lfc_admin_gviz_" +
-      sheetName.replace(/[^a-z0-9]/gi, "_") +
-      "_" +
-      Math.random().toString(36).slice(2);
+function edgeIsActive(edge) {
+  return edge && edge.is_active !== false;
+}
 
-    const url =
-      "https://docs.google.com/spreadsheets/d/" +
-      encodeURIComponent(CRAFT_SHEET_ID) +
-      "/gviz/tq?tqx=out:json;responseHandler:" +
-      encodeURIComponent(cb) +
-      "&sheet=" +
-      encodeURIComponent(sheetName);
+function getActiveEdges() {
+  return (catalogUpgradeEdgesCache || []).filter(edgeIsActive);
+}
 
-    const script = document.createElement("script");
+function buildParentMap(edges = getActiveEdges()) {
+  const parentByChild = new Map();
 
-    const timer = setTimeout(() => {
-      cleanup();
-      reject(new Error("Timeout beim Laden von Sheet: " + sheetName));
-    }, timeoutMs);
-
-    function cleanup() {
-      clearTimeout(timer);
-
-      try {
-        delete window[cb];
-      } catch {}
-
-      if (script.parentNode) {
-        script.parentNode.removeChild(script);
-      }
+  edges.forEach((edge) => {
+    const child = String(edge.to_vehicle_id);
+    if (!parentByChild.has(child)) {
+      parentByChild.set(child, String(edge.from_vehicle_id));
     }
-
-    window[cb] = function (payload) {
-      cleanup();
-
-      try {
-        const cols = (payload.table.cols || []).map((c, index) => {
-          const label = String(c.label || c.id || `col_${index}`).trim();
-          return label || `col_${index}`;
-        });
-
-        const rows = (payload.table.rows || []).map((row) => {
-          const obj = {};
-
-          (row.c || []).forEach((cell, index) => {
-            const key = cols[index] || `col_${index}`;
-            obj[key] = cell ? cell.v : "";
-          });
-
-          return obj;
-        });
-
-        resolve(rows);
-      } catch (error) {
-        reject(error);
-      }
-    };
-
-    script.onerror = () => {
-      cleanup();
-      reject(new Error("GViz Fehler beim Laden von Sheet: " + sheetName));
-    };
-
-    script.src = url;
-    document.head.appendChild(script);
   });
+
+  return parentByChild;
 }
 
-function getRowValue(row, names) {
-  const entries = Object.entries(row || {});
-  const normalized = entries.map(([key, value]) => [normKey(key), value]);
+function buildChildrenMap(edges = getActiveEdges()) {
+  const childrenByParent = new Map();
 
-  for (const name of names) {
-    const target = normKey(name);
-    const found = normalized.find(([key]) => key === target);
-    if (found) return found[1];
-  }
+  edges.forEach((edge) => {
+    const parent = String(edge.from_vehicle_id);
+    const child = String(edge.to_vehicle_id);
 
-  for (const name of names) {
-    const target = normKey(name);
-    const found = normalized.find(([key]) => key.includes(target));
-    if (found) return found[1];
-  }
-
-  return "";
-}
-
-function addDependency(productKey, itemKey) {
-  const product = normKey(productKey);
-  const item = normKey(itemKey);
-
-  if (!product || !item || product === item) return;
-
-  if (!craftDeps[product]) craftDeps[product] = new Set();
-  craftDeps[product].add(item);
-}
-
-async function loadCraftDependencies() {
-  craftDeps = {};
-  craftLoaded = false;
-
-  try {
-    const [itemsRows] = await Promise.all([
-      gvizJSONP(TAB_RECIPE_ITEMS),
-      gvizJSONP(TAB_RECIPES).catch(() => [])
-    ]);
-
-    itemsRows.forEach((row) => {
-      const product =
-        getRowValue(row, [
-          "product",
-          "produkt",
-          "recipe",
-          "recipe_key",
-          "craft_key",
-          "target",
-          "result",
-          "output",
-          "output_key",
-          "result_key"
-        ]) || "";
-
-      const item =
-        getRowValue(row, [
-          "item",
-          "item_key",
-          "input",
-          "input_key",
-          "ingredient",
-          "ingredient_key",
-          "source",
-          "source_key",
-          "required_item"
-        ]) || "";
-
-      const qty =
-        getRowValue(row, [
-          "qty",
-          "quantity",
-          "menge",
-          "amount",
-          "anzahl"
-        ]) || "";
-
-      if (!product || !item) return;
-      if (qty !== "" && Number(qty) === 0) return;
-
-      addDependency(product, item);
-    });
-
-    craftDeps = Object.fromEntries(
-      Object.entries(craftDeps).map(([key, set]) => [key, Array.from(set)])
-    );
-
-    craftLoaded = Object.keys(craftDeps).length > 0;
-  } catch (error) {
-    console.warn("Upgrade-Daten konnten nicht geladen werden. Fallback aktiv.", error);
-    craftDeps = {};
-    craftLoaded = false;
-  }
-}
-
-function craftDependsOn(childKey, ancestorKey) {
-  const start = normKey(childKey);
-  const target = normKey(ancestorKey);
-
-  if (!start || !target || start === target) return false;
-
-  const visited = new Set();
-  const stack = [start];
-
-  while (stack.length) {
-    const key = stack.pop();
-
-    if (visited.has(key)) continue;
-    visited.add(key);
-
-    const deps = craftDeps[key] || [];
-
-    for (const dep of deps) {
-      if (dep === target) return true;
-      stack.push(dep);
+    if (!childrenByParent.has(parent)) {
+      childrenByParent.set(parent, []);
     }
-  }
 
-  return false;
+    childrenByParent.get(parent).push(child);
+  });
+
+  return childrenByParent;
 }
 
-function fallbackFamilyKey(v) {
-  let s = String(v.display_name || v.blueprint_name || "")
-    .replace(/\s*Bauplan\s*$/i, "")
-    .trim();
-
-  s = s
-    .replace(/\s+/g, " ")
-    .replace(/\s*-\s*S$/i, "")
-    .replace(/\s*S$/i, "")
-    .replace(/\s*-\s*R$/i, "")
-    .replace(/\s+RAW$/i, "")
-    .replace(/\s+D-Type$/i, "")
-    .replace(/\s+Cisterne$/i, "")
-    .replace(/\s+Gerät$/i, "")
-    .replace(/\s+t\d+$/i, "")
-    .replace(/\s+HardLiner.*$/i, " HardLiner")
-    .replace(/\s+Highline.*$/i, " Highline")
-    .trim();
-
-  if (/cyberbeast/i.test(s)) s = "Tesla Cybertruck";
-  if (/stingray/i.test(s)) s = "Corvette C2";
-  if (/z-type/i.test(s)) s = "Truffade Z-Type";
-  if (/viper/i.test(s)) s = "Dodge Viper SRT 10";
-  if (/regalia/i.test(s)) s = "Quartz Regalia";
-  if (/hotknife/i.test(s)) s = "Vapid Hotknife";
-  if (/scania\s+s-520/i.test(s)) s = "Scania S-520";
-  if (/actros\s+666/i.test(s)) s = "Mercedes-Benz Actros 666";
-
-  return normKey((v.group_name || "") + "::" + s);
-}
-
-function connectedFamiliesByCraft(items) {
-  const idToItem = new Map();
+function buildFamiliesFromVehicles(vehicles, edges = getActiveEdges()) {
+  const byId = new Map(vehicles.map((v) => [String(v.id), v]));
   const neighbors = new Map();
 
-  items.forEach((v) => {
-    idToItem.set(v.id, v);
-    neighbors.set(v.id, new Set());
+  vehicles.forEach((v) => neighbors.set(String(v.id), new Set()));
+
+  edges.forEach((edge) => {
+    const from = String(edge.from_vehicle_id);
+    const to = String(edge.to_vehicle_id);
+
+    if (!byId.has(from) || !byId.has(to)) return;
+
+    neighbors.get(from).add(to);
+    neighbors.get(to).add(from);
   });
 
-  for (let i = 0; i < items.length; i++) {
-    for (let j = i + 1; j < items.length; j++) {
-      const a = items[i];
-      const b = items[j];
-
-      const ak = vehicleKey(a);
-      const bk = vehicleKey(b);
-
-      const linked = craftDependsOn(ak, bk) || craftDependsOn(bk, ak);
-
-      if (linked) {
-        neighbors.get(a.id).add(b.id);
-        neighbors.get(b.id).add(a.id);
-      }
-    }
-  }
-
+  const parentByChild = buildParentMap(edges);
   const visited = new Set();
   const families = [];
 
-  items.forEach((start) => {
-    if (visited.has(start.id)) return;
+  vehicles.forEach((start) => {
+    const startId = String(start.id);
+    if (visited.has(startId)) return;
 
-    const queue = [start.id];
-    const comp = [];
-    visited.add(start.id);
+    const queue = [startId];
+    const component = [];
+    visited.add(startId);
 
     while (queue.length) {
       const id = queue.shift();
-      const item = idToItem.get(id);
-      if (item) comp.push(item);
+      const vehicle = byId.get(id);
+      if (vehicle) component.push(vehicle);
 
       for (const next of neighbors.get(id) || []) {
         if (!visited.has(next)) {
@@ -533,150 +313,70 @@ function connectedFamiliesByCraft(items) {
       }
     }
 
-    families.push(comp);
-  });
+    const roots = component.filter((v) => !parentByChild.has(String(v.id)));
+    const base = roots[0] || component[0];
 
-  return families;
-}
+    const variants = component.slice().sort((a, b) => {
+      const la = getVehicleLevel(a.id, parentByChild);
+      const lb = getVehicleLevel(b.id, parentByChild);
 
-function fallbackFamiliesByName(items) {
-  const map = new Map();
-
-  items.forEach((v) => {
-    const key = fallbackFamilyKey(v);
-    if (!map.has(key)) map.set(key, []);
-    map.get(key).push(v);
-  });
-
-  return Array.from(map.values());
-}
-
-function mergeSmallCraftFamiliesWithNameFallback(craftFamilies, items) {
-  const byId = new Map();
-  const used = new Set();
-  const result = [];
-
-  craftFamilies.forEach((family) => {
-    if (family.length > 1) {
-      family.forEach((v) => used.add(v.id));
-      result.push(family);
-    }
-  });
-
-  items.forEach((v) => {
-    if (!used.has(v.id)) {
-      byId.set(v.id, v);
-    }
-  });
-
-  fallbackFamiliesByName(Array.from(byId.values())).forEach((family) => {
-    result.push(family);
-  });
-
-  return result;
-}
-
-function familyLevel(v, allInFamily, memo = {}) {
-  const key = vehicleKey(v);
-
-  if (memo[key] != null) return memo[key];
-
-  const parents = allInFamily.filter((candidate) => {
-    if (candidate.id === v.id) return false;
-    return craftDependsOn(key, vehicleKey(candidate));
-  });
-
-  if (!parents.length) {
-    memo[key] = 0;
-    return 0;
-  }
-
-  memo[key] =
-    1 +
-    Math.max(
-      ...parents.map((parent) => familyLevel(parent, allInFamily, memo))
-    );
-
-  return memo[key];
-}
-
-function sortFamilyVariants(list) {
-  const memo = {};
-
-  return list.slice().sort((a, b) => {
-    const la = familyLevel(a, list, memo);
-    const lb = familyLevel(b, list, memo);
-
-    return (
-      la - lb ||
-      Number(a.sort_order || 1000) - Number(b.sort_order || 1000) ||
-      String(a.display_name || "").localeCompare(String(b.display_name || ""), "de")
-    );
-  });
-}
-
-function getBaseVariant(sorted) {
-  if (!sorted.length) return null;
-
-  const withLevel = sorted.map((v) => ({
-    v,
-    level: familyLevel(v, sorted, {})
-  }));
-
-  withLevel.sort((a, b) => {
-    return (
-      a.level - b.level ||
-      Number(a.v.sort_order || 1000) - Number(b.v.sort_order || 1000) ||
-      String(a.v.display_name || "").localeCompare(String(b.v.display_name || ""), "de")
-    );
-  });
-
-  return withLevel[0].v;
-}
-
-function buildOrderFamilies() {
-  const byGroup = new Map();
-
-  orderVehiclesCache.forEach((v) => {
-    const g = v.group_name || "Ohne Gruppe";
-    if (!byGroup.has(g)) byGroup.set(g, []);
-    byGroup.get(g).push(v);
-  });
-
-  const families = [];
-
-  for (const [, items] of byGroup) {
-    const craftFamilies = connectedFamiliesByCraft(items);
-    const mergedFamilies = mergeSmallCraftFamiliesWithNameFallback(craftFamilies, items);
-
-    mergedFamilies.forEach((list) => {
-      const variants = sortFamilyVariants(list);
-      const base = getBaseVariant(variants) || variants[0];
-
-      families.push({
-        base,
-        variants
-      });
-    });
-  }
-
-  return families;
-}
-
-function getUpgradePath(family, selected) {
-  const path = family.variants
-    .filter((v) => {
-      if (v.id === selected.id) return true;
-      return craftDependsOn(vehicleKey(selected), vehicleKey(v));
-    })
-    .sort((a, b) => {
       return (
-        familyLevel(a, family.variants, {}) - familyLevel(b, family.variants, {}) ||
-        Number(a.sort_order || 1000) - Number(b.sort_order || 1000)
+        la - lb ||
+        Number(a.sort_order || 1000) - Number(b.sort_order || 1000) ||
+        String(a.display_name || "").localeCompare(String(b.display_name || ""), "de")
       );
     });
 
-  return path.length ? path : [selected];
+    families.push({
+      base,
+      variants
+    });
+  });
+
+  families.sort((a, b) => {
+    return (
+      Number(a.base?.group_sort_order || 1000) - Number(b.base?.group_sort_order || 1000) ||
+      Number(a.base?.sort_order || 1000) - Number(b.base?.sort_order || 1000) ||
+      String(a.base?.display_name || "").localeCompare(String(b.base?.display_name || ""), "de")
+    );
+  });
+
+  return families;
+}
+
+function getVehicleLevel(vehicleId, parentByChild = buildParentMap()) {
+  let level = 0;
+  let current = String(vehicleId);
+  const seen = new Set();
+
+  while (parentByChild.has(current)) {
+    if (seen.has(current)) break;
+    seen.add(current);
+
+    current = parentByChild.get(current);
+    level++;
+  }
+
+  return level;
+}
+
+function getPathToVehicle(vehicleId, parentByChild = buildParentMap(), vehicles = orderVehiclesCache) {
+  const byId = new Map(vehicles.map((v) => [String(v.id), v]));
+  const path = [];
+  let current = String(vehicleId);
+  const seen = new Set();
+
+  while (current && byId.has(current)) {
+    if (seen.has(current)) break;
+    seen.add(current);
+
+    path.push(byId.get(current));
+
+    if (!parentByChild.has(current)) break;
+    current = parentByChild.get(current);
+  }
+
+  return path.reverse();
 }
 
 function getFamilyForVehicle(vehicleId) {
@@ -691,6 +391,16 @@ function getVehicleById(vehicleId) {
 
 function getResourceById(itemId) {
   return orderResourcesCache.find((x) => String(x.item_id) === String(itemId)) || null;
+}
+
+function isUpgradeVehicle(vehicleId) {
+  const parentByChild = buildParentMap();
+  return parentByChild.has(String(vehicleId));
+}
+
+function getCurrentParentId(vehicleId) {
+  const parentByChild = buildParentMap();
+  return parentByChild.get(String(vehicleId)) || "";
 }
 
 /* =========================================================
@@ -733,8 +443,18 @@ async function loadVehicleGroups() {
   vehicleGroupsCache = data || [];
 }
 
+async function loadCatalogUpgradeEdges() {
+  const { data, error } = await window.lfcSupabase
+    .from("vehicle_upgrade_edges")
+    .select("id,from_vehicle_id,to_vehicle_id,sort_order,is_active")
+    .order("sort_order", { ascending: true });
+
+  if (error) throw error;
+  catalogUpgradeEdgesCache = data || [];
+}
+
 async function loadOrderData() {
-  const [vehiclesRes, resourcesRes] = await Promise.all([
+  const [vehiclesRes, resourcesRes, edgesRes] = await Promise.all([
     window.lfcSupabase
       .from("public_vehicle_catalog")
       .select("*"),
@@ -742,22 +462,56 @@ async function loadOrderData() {
       .from("public_item_prices")
       .select("*")
       .order("sort_order", { ascending: true })
-      .order("item_name", { ascending: true })
+      .order("item_name", { ascending: true }),
+    window.lfcSupabase
+      .from("vehicle_upgrade_edges")
+      .select("id,from_vehicle_id,to_vehicle_id,sort_order,is_active")
+      .eq("is_active", true)
+      .order("sort_order", { ascending: true })
   ]);
 
   if (vehiclesRes.error) throw vehiclesRes.error;
   if (resourcesRes.error) throw resourcesRes.error;
+  if (edgesRes.error) throw edgesRes.error;
 
   orderVehiclesCache = (vehiclesRes.data || []).filter((v) => v.group_name);
   orderResourcesCache = resourcesRes.data || [];
+  catalogUpgradeEdgesCache = edgesRes.data || [];
 
-  await loadCraftDependencies();
-  orderFamiliesCache = buildOrderFamilies();
+  orderFamiliesCache = buildFamiliesFromVehicles(orderVehiclesCache, getActiveEdges());
 }
 
 /* =========================================================
    KATALOG-VERWALTUNG
 ========================================================= */
+
+function renderGroupOptions(selectedGroupId) {
+  const selected = selectedGroupId ? String(selectedGroupId) : "";
+
+  return `
+    <option value="">Ohne Gruppe</option>
+    ${vehicleGroupsCache.map((g) => {
+      const id = String(g.id);
+      return `<option value="${escHtml(id)}" ${id === selected ? "selected" : ""}>${escHtml(g.name)}</option>`;
+    }).join("")}
+  `;
+}
+
+function renderParentVehicleOptions(currentVehicleId, selectedParentId) {
+  const current = currentVehicleId ? String(currentVehicleId) : "";
+  const selected = selectedParentId ? String(selectedParentId) : "";
+
+  return `
+    <option value="">Kein Upgrade / Basisfahrzeug</option>
+    ${orderVehiclesCache
+      .filter((v) => String(v.id) !== current)
+      .sort((a, b) => String(a.display_name || "").localeCompare(String(b.display_name || ""), "de"))
+      .map((v) => {
+        const id = String(v.id);
+        return `<option value="${escHtml(id)}" ${id === selected ? "selected" : ""}>${escHtml(v.display_name)}${v.group_name ? " – " + escHtml(v.group_name) : ""}</option>`;
+      }).join("")}
+  `;
+}
 
 async function loadVehicles() {
   const c = document.getElementById("content");
@@ -791,12 +545,93 @@ async function loadVehicles() {
 
     if (error) throw error;
 
+    const { data: publicVehicles, error: publicVehicleError } = await window.lfcSupabase
+      .from("public_vehicle_catalog")
+      .select("*");
+
+    if (publicVehicleError) throw publicVehicleError;
+
+    orderVehiclesCache = publicVehicles || [];
+    await loadCatalogUpgradeEdges();
+
     c.innerHTML = `
+      <section class="bt-card">
+        <h2>Neues Fahrzeug / Fahrzeugupgrade anlegen</h2>
+
+        <form id="createVehicleForm" class="shop-form">
+          <div class="settings-grid">
+            <div class="shop-field">
+              <label>Anzeigename *</label>
+              <input class="input" id="createVehicleName" required placeholder="z.B. Tesla Cybertruck">
+            </div>
+
+            <div class="shop-field">
+              <label>Gruppe *</label>
+              <select class="input" id="createVehicleGroup" required>
+                ${renderGroupOptions("")}
+              </select>
+            </div>
+
+            <div class="shop-field">
+              <label>Preis</label>
+              <input class="input" id="createVehiclePrice" type="number" min="0" step="1" value="0">
+            </div>
+
+            <div class="shop-field">
+              <label>Sortierung</label>
+              <input class="input" id="createVehicleSortOrder" type="number" value="1000">
+            </div>
+          </div>
+
+          <div class="settings-grid">
+            <div class="shop-field">
+              <label>Fahrzeugtyp</label>
+              <select class="input" id="createVehicleType">
+                <option value="base">Basisfahrzeug / normales Fahrzeug</option>
+                <option value="upgrade">Upgrade eines vorhandenen Fahrzeugs</option>
+              </select>
+            </div>
+
+            <div class="shop-field">
+              <label>Upgrade von</label>
+              <select class="input" id="createVehicleParent" disabled>
+                ${renderParentVehicleOptions("", "")}
+              </select>
+            </div>
+
+            <div class="shop-field">
+              <label>Kofferraum</label>
+              <input class="input" id="createVehicleTrunk" placeholder="optional">
+            </div>
+
+            <div class="shop-field">
+              <label>Bauplan</label>
+              <input class="input" id="createVehicleBlueprint" placeholder="optional">
+            </div>
+          </div>
+
+          <div class="shop-field">
+            <label>Beschreibung</label>
+            <textarea class="input" id="createVehicleDescription" placeholder="optional"></textarea>
+          </div>
+
+          <div class="shop-field">
+            <label>Bilder, eine https:// URL pro Zeile</label>
+            <textarea class="input imageUrls" id="createVehicleImages" placeholder="https://..."></textarea>
+          </div>
+
+          <button class="btn" type="submit">Fahrzeug anlegen</button>
+        </form>
+      </section>
+
+      <hr>
+
       <table class="admin-table">
         <thead>
           <tr>
             <th>Fahrzeug</th>
             <th>Gruppe</th>
+            <th>Upgrade von</th>
             <th>Preis</th>
             <th>Sichtbar</th>
             <th>Beschreibung</th>
@@ -805,31 +640,42 @@ async function loadVehicles() {
             <th>Aktion</th>
           </tr>
         </thead>
+
         <tbody>
           ${(data || []).map((v) => {
             const imageText = imagesToTextarea(v.vehicle_images || "");
+            const parentId = getCurrentParentId(v.id);
 
             return `
               <tr data-id="${escHtml(v.id)}">
                 <td>
                   <div class="small">${escHtml(v.craft_key)}</div>
+
                   <div class="small">Anzeigename / Katalogtitel</div>
                   ${input(v.display_name || "", "display_name")}
+
                   <div class="small">Bauplan</div>
                   ${input(v.blueprint_name || "", "blueprint_name")}
+
+                  <div class="small">Sortierung</div>
+                  ${input(v.sort_order ?? 1000, "sort_order", "number")}
                 </td>
 
                 <td>
-                  <div class="small">Gruppe</div>
                   <select class="input" data-name="group_id">${renderGroupOptions(v.group_id)}</select>
                 </td>
 
                 <td>
-                  <div class="small">Preis</div>
-                  ${input(v.price ?? 0, "price", "number")}
-                  <div class="small">Sortierung</div>
-                  ${input(v.sort_order ?? 1000, "sort_order", "number")}
+                  <select class="input" data-name="_upgrade_parent_id">
+                    ${renderParentVehicleOptions(v.id, parentId)}
+                  </select>
+                  <div class="small">
+                    Leer = Basisfahrzeug.<br>
+                    Auswahl = dieses Fahrzeug ist ein Upgrade davon.
+                  </div>
                 </td>
+
+                <td>${input(v.price ?? 0, "price", "number")}</td>
 
                 <td>
                   <label class="small">
@@ -842,7 +688,7 @@ async function loadVehicles() {
                 <td>${input(v.trunk_size || "", "trunk_size")}</td>
 
                 <td class="img-editor">
-                  <div class="small">Bild-URLs, eine URL pro Zeile. Nur https:// Links.</div>
+                  <div class="small">Nur https:// Links. Erstes Bild = Hauptbild.</div>
                   <textarea class="input imageUrls" data-name="_image_urls">${escHtml(imageText)}</textarea>
                   <div class="imagePreview">${renderImagePreview(imageText)}</div>
                 </td>
@@ -859,6 +705,16 @@ async function loadVehicles() {
         </tbody>
       </table>
     `;
+
+    const typeSelect = document.getElementById("createVehicleType");
+    const parentSelect = document.getElementById("createVehicleParent");
+
+    typeSelect.addEventListener("change", () => {
+      parentSelect.disabled = typeSelect.value !== "upgrade";
+      if (typeSelect.value !== "upgrade") parentSelect.value = "";
+    });
+
+    document.getElementById("createVehicleForm").addEventListener("submit", createVehicle);
 
     document.querySelectorAll(".saveVehicle").forEach((btn) => btn.onclick = saveVehicle);
     document.querySelectorAll(".previewImages").forEach((btn) => btn.onclick = updateImagePreviewForRow);
@@ -889,14 +745,118 @@ function updateImagePreview(tr) {
   preview.innerHTML = renderImagePreview(textareaEl.value);
 }
 
+async function createVehicle(e) {
+  e.preventDefault();
+
+  const name = document.getElementById("createVehicleName").value.trim();
+  const groupId = document.getElementById("createVehicleGroup").value || null;
+  const price = Number(document.getElementById("createVehiclePrice").value || 0);
+  const sortOrder = Number(document.getElementById("createVehicleSortOrder").value || 1000);
+  const type = document.getElementById("createVehicleType").value;
+  const parentId = document.getElementById("createVehicleParent").value || "";
+  const trunk = document.getElementById("createVehicleTrunk").value.trim();
+  const blueprint = document.getElementById("createVehicleBlueprint").value.trim();
+  const description = document.getElementById("createVehicleDescription").value.trim();
+  const imageText = document.getElementById("createVehicleImages").value;
+
+  if (!name) {
+    alert("Bitte Fahrzeugname eintragen.");
+    return;
+  }
+
+  if (!groupId) {
+    alert("Bitte Gruppe auswählen.");
+    return;
+  }
+
+  if (type === "upgrade" && !parentId) {
+    alert("Bitte auswählen, von welchem Fahrzeug dieses Upgrade kommt.");
+    return;
+  }
+
+  const imageUrls = parseImageTextarea(imageText);
+  const invalid = String(imageText || "")
+    .split(/\r?\n/)
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .filter((url) => !/^https:\/\//i.test(url));
+
+  if (invalid.length) {
+    alert("Ungültige Bild-URLs gefunden. Erlaubt sind nur https:// Links.");
+    return;
+  }
+
+  try {
+    const { data: vehicle, error: vehicleError } = await window.lfcSupabase
+      .from("vehicle_catalog_entries")
+      .insert({
+        craft_key: generateManualCraftKey(),
+        display_name: name,
+        blueprint_name: blueprint || name,
+        description,
+        price,
+        group_id: groupId,
+        trunk_size: trunk,
+        is_visible: true,
+        sort_order: sortOrder
+      })
+      .select("id")
+      .single();
+
+    if (vehicleError) throw vehicleError;
+
+    if (imageUrls.length) {
+      const imageRows = imageUrls.map((url, index) => ({
+        vehicle_catalog_entry_id: vehicle.id,
+        image_url: url,
+        sort_order: index + 1,
+        is_primary: index === 0
+      }));
+
+      const { error: imageError } = await window.lfcSupabase
+        .from("vehicle_images")
+        .insert(imageRows);
+
+      if (imageError) throw imageError;
+    }
+
+    if (type === "upgrade" && parentId) {
+      const { error: edgeError } = await window.lfcSupabase
+        .from("vehicle_upgrade_edges")
+        .insert({
+          from_vehicle_id: parentId,
+          to_vehicle_id: vehicle.id,
+          sort_order: sortOrder,
+          is_active: true
+        });
+
+      if (edgeError) throw edgeError;
+    }
+
+    setAdminStatus("✅ Fahrzeug angelegt.", "ok");
+    await loadVehicles();
+  } catch (error) {
+    console.error(error);
+    alert(error.message || String(error));
+    setAdminStatus("❌ Fahrzeug konnte nicht angelegt werden.", "err");
+  }
+}
+
 async function saveVehicle(e) {
   const tr = e.target.closest("tr");
   const id = tr.dataset.id;
   const vehicleUpdate = {};
+  let parentId = "";
 
   tr.querySelectorAll("[data-name]").forEach((el) => {
     const name = el.dataset.name;
+
     if (name === "_image_urls") return;
+
+    if (name === "_upgrade_parent_id") {
+      parentId = el.value || "";
+      return;
+    }
 
     if (el.type === "checkbox") vehicleUpdate[name] = el.checked;
     else if (name === "price") vehicleUpdate[name] = Number(el.value || 0);
@@ -904,6 +864,11 @@ async function saveVehicle(e) {
     else if (name === "group_id") vehicleUpdate[name] = el.value ? el.value : null;
     else vehicleUpdate[name] = el.value;
   });
+
+  if (parentId && String(parentId) === String(id)) {
+    alert("Ein Fahrzeug kann nicht Upgrade von sich selbst sein.");
+    return;
+  }
 
   const imageTextarea = tr.querySelector('[data-name="_image_urls"]');
   const rawImageLines = String(imageTextarea ? imageTextarea.value : "")
@@ -958,8 +923,28 @@ async function saveVehicle(e) {
       if (insertImagesError) throw insertImagesError;
     }
 
-    setAdminStatus("✅ Fahrzeug gespeichert.", "ok");
+    await window.lfcSupabase
+      .from("vehicle_upgrade_edges")
+      .delete()
+      .eq("to_vehicle_id", id);
+
+    if (parentId) {
+      const { error: edgeError } = await window.lfcSupabase
+        .from("vehicle_upgrade_edges")
+        .insert({
+          from_vehicle_id: parentId,
+          to_vehicle_id: id,
+          sort_order: Number(vehicleUpdate.sort_order || 1000),
+          is_active: true
+        });
+
+      if (edgeError) throw edgeError;
+    }
+
+    setAdminStatus("✅ Fahrzeug und Upgrade-Zuordnung gespeichert.", "ok");
     updateImagePreview(tr);
+
+    await loadCatalogUpgradeEdges();
   } catch (error) {
     console.error(error);
     alert(error.message || String(error));
@@ -1264,13 +1249,8 @@ function getNewVehicleOptions() {
 
 function getUpgradeVehicleOptions() {
   return orderVehiclesCache
-    .filter((v) => {
-      if (isRucksackVehicle(v)) return false;
-      const family = getFamilyForVehicle(v.id);
-      if (!family) return false;
-      const path = getUpgradePath(family, v);
-      return path.length > 1;
-    })
+    .filter((v) => !isRucksackVehicle(v))
+    .filter((v) => isUpgradeVehicle(v.id))
     .slice()
     .sort((a, b) => String(a.display_name).localeCompare(String(b.display_name), "de"));
 }
@@ -1296,7 +1276,7 @@ function renderNewOrderProductArea() {
           <option value="">Bitte Fahrzeug wählen</option>
           ${options.map((v) => `<option value="${escHtml(v.id)}">${escHtml(vehicleOptionLabel(v))}</option>`).join("")}
         </select>
-        <div class="small">Wenn ein upgegradetes Fahrzeug gewählt wird, werden die darunterliegenden Fahrzeuge automatisch mitberechnet.</div>
+        <div class="small">Wenn ein Upgrade-Fahrzeug gewählt wird, werden Basis + Zwischenstufen + Ziel-Fahrzeug berechnet.</div>
       </div>
     `;
 
@@ -1313,7 +1293,7 @@ function renderNewOrderProductArea() {
           <option value="">Bitte Upgrade wählen</option>
           ${options.map((v) => `<option value="${escHtml(v.id)}">${escHtml(vehicleOptionLabel(v))}</option>`).join("")}
         </select>
-        <div class="small">Es werden nur Fahrzeuge angezeigt, die ein Upgrade eines bestehenden Fahrzeuges sind.</div>
+        <div class="small">Nur Fahrzeuge, die in der Katalog-Verwaltung als Upgrade gepflegt sind. Berechnet wird nur das gewählte Upgrade.</div>
       </div>
     `;
 
@@ -1439,10 +1419,9 @@ function getSelectedOrderData() {
     };
   }
 
-  const family = getFamilyForVehicle(vehicle.id);
-  const path = family ? getUpgradePath(family, vehicle) : [vehicle];
+  const parentByChild = buildParentMap();
+  const fullPath = getPathToVehicle(vehicle.id, parentByChild, orderVehiclesCache);
 
-  const isUpgrade = type === "vehicle_upgrade";
   const typeLabel =
     type === "new_vehicle"
       ? "Neuwagen"
@@ -1450,7 +1429,17 @@ function getSelectedOrderData() {
         ? "Upgrade eines Fahrzeuges"
         : "Rucksack";
 
-  const total = path.reduce((sum, v) => sum + Number(v.price || 0), 0);
+  let billedItems = [];
+
+  if (type === "new_vehicle") {
+    billedItems = fullPath;
+  } else if (type === "vehicle_upgrade") {
+    billedItems = [vehicle];
+  } else {
+    billedItems = [vehicle];
+  }
+
+  const total = billedItems.reduce((sum, v) => sum + Number(v.price || 0), 0);
 
   return {
     ok: true,
@@ -1458,8 +1447,8 @@ function getSelectedOrderData() {
     total,
     title: vehicle.display_name,
     image: firstVehicleImage(vehicle),
-    items: path.map((v) => ({
-      item_type: type === "backpack" ? "backpack" : isUpgrade ? "vehicle_upgrade_step" : "vehicle",
+    items: billedItems.map((v) => ({
+      item_type: type === "backpack" ? "backpack" : type === "vehicle_upgrade" ? "vehicle_upgrade" : "vehicle",
       item_id: null,
       vehicle_catalog_entry_id: v.id,
       title: v.display_name,
@@ -1471,8 +1460,14 @@ function getSelectedOrderData() {
       <strong>Typ:</strong> ${escHtml(typeLabel)}<br>
       <strong>Produkt:</strong> ${escHtml(vehicle.display_name)}<br>
       ${
-        path.length > 1
-          ? `<strong>Berechnete Stufen:</strong><br>${path.map((v) => `→ ${escHtml(v.display_name)} ${euro(v.price)}`).join("<br>")}<br>`
+        type === "new_vehicle" && fullPath.length > 1
+          ? `<strong>Berechneter Neuwagen-Pfad:</strong><br>${fullPath.map((v) => `→ ${escHtml(v.display_name)} ${euro(v.price)}`).join("<br>")}<br>`
+          : ""
+      }
+      ${
+        type === "vehicle_upgrade" && fullPath.length > 1
+          ? `<strong>Vorhandener Pfad:</strong><br>${fullPath.slice(0, -1).map((v) => `→ ${escHtml(v.display_name)} ${euro(v.price)} <span class="small">(nicht berechnet)</span>`).join("<br>")}<br>
+             <strong>Berechnetes Upgrade:</strong><br>→ ${escHtml(vehicle.display_name)} ${euro(vehicle.price)}<br>`
           : `<strong>Berechnet:</strong> ${escHtml(vehicle.display_name)} ${euro(vehicle.price)}<br>`
       }
       <strong>Gesamtpreis:</strong> ${euro(total)}
